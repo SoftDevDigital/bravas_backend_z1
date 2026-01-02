@@ -1,0 +1,73 @@
+service: bravas-content-service
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 30
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    NODE_OPTIONS: --enable-source-maps
+    ENVIRONMENT: ${self:provider.stage}
+    PROJECT_NAME: bravas
+    # URLs de otros servicios
+    USER_SERVICE_URL: http://localhost:3000/api/v1
+    PAYMENT_SERVICE_URL: http://localhost:3002/api/v1
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:DeleteItem
+          Resource:
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-posts"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-packs"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-posts/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-packs/index/*"
+        - Effect: "Allow"
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource:
+            - "arn:aws:s3:::${self:provider.environment}-content/*"
+            - "arn:aws:s3:::${self:provider.environment}-content"
+        - Effect: "Allow"
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            - "arn:aws:secretsmanager:${self:provider.region}:*:secret:bravas/*"
+
+plugins:
+  - serverless-webpack
+  - serverless-offline
+
+functions:
+  main:
+    handler: dist/apps/content-service/handler.handler
+    events:
+      - http:
+          method: any
+          path: /{proxy+}
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3005
+
+
+
+
+
+
+

@@ -1,0 +1,44 @@
+service: bravas-admin-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: admin-service
+    USER_SERVICE_URL: ${env:USER_SERVICE_URL, 'http://localhost:3001/api/v1'}
+    CONTENT_SERVICE_URL: ${env:CONTENT_SERVICE_URL, 'http://localhost:3005/api/v1'}
+    PAYMENT_SERVICE_URL: ${env:PAYMENT_SERVICE_URL, 'http://localhost:3002/api/v1'}
+
+# Funciones Lambda
+functions:
+  admin:
+    handler: dist/handler.handler
+    description: Admin Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: admin/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: admin
+          method: ANY
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3007
+
+

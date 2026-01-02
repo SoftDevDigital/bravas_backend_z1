@@ -1,0 +1,71 @@
+service: bravas-auth-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: auth-service
+    COGNITO_USER_POOL_ID: ${env:COGNITO_USER_POOL_ID}
+    COGNITO_CLIENT_ID: ${env:COGNITO_CLIENT_ID}
+    COGNITO_CLIENT_SECRET: ${env:COGNITO_CLIENT_SECRET}
+    DYNAMODB_USERS_TABLE: ${env:DYNAMODB_USERS_TABLE}
+    DYNAMODB_USER_PROFILES_TABLE: ${env:DYNAMODB_USER_PROFILES_TABLE}
+
+# Funciones Lambda
+functions:
+  auth:
+    handler: dist/handler.handler
+    description: Auth Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: auth/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: auth
+          method: ANY
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3000
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

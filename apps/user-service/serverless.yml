@@ -1,0 +1,66 @@
+service: bravas-user-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: user-service
+    DYNAMODB_USERS_TABLE: ${env:DYNAMODB_USERS_TABLE}
+    DYNAMODB_USER_PROFILES_TABLE: ${env:DYNAMODB_USER_PROFILES_TABLE}
+    S3_AVATARS_BUCKET: ${env:S3_AVATARS_BUCKET}
+
+# Funciones Lambda
+functions:
+  user:
+    handler: dist/handler.handler
+    description: User Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: users/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: users
+          method: ANY
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3001
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

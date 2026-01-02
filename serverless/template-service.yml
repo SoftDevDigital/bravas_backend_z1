@@ -1,0 +1,81 @@
+# Template de serverless.yml para cada servicio
+# Copiar este archivo a apps/{service-name}/serverless.yml y personalizar
+
+service: bravas-{SERVICE_NAME}-service
+
+frameworkVersion: '3'
+
+# Importar configuración común del provider
+provider: ${file(../../serverless-common.yml):provider}
+
+# Funciones Lambda del servicio
+functions:
+  # Ejemplo: Función de registro
+  registerUser:
+    handler: dist/handler.registerUser
+    description: Register a new user
+    events:
+      - http:
+          path: {SERVICE_PATH}/register
+          method: post
+          cors: true
+    environment:
+      # Variables específicas de esta función
+      SERVICE_NAME: {SERVICE_NAME}
+
+  # Ejemplo: Función de login
+  loginUser:
+    handler: dist/handler.loginUser
+    description: User login
+    events:
+      - http:
+          path: {SERVICE_PATH}/login
+          method: post
+          cors: true
+
+# Plugins (heredados de common, pero se pueden agregar más)
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+# Configuración personalizada del servicio
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3000
+
+# Recursos adicionales (opcional)
+# resources:
+#   Resources:
+#     # Definir recursos adicionales si es necesario
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,64 @@
+service: bravas-contracts-service
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  memorySize: 128
+  timeout: 10
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    NODE_OPTIONS: --enable-source-maps
+    ENVIRONMENT: ${self:provider.stage}
+    PROJECT_NAME: bravas
+    # URLs de otros servicios (se pueden obtener de SSM en producción)
+    USER_SERVICE_URL: http://localhost:3000/api/v1
+    MESSAGES_SERVICE_URL: http://localhost:3003/api/v1
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:DeleteItem
+          Resource:
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-contracts"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-contract-proposals"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-contracts/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-contract-proposals/index/*"
+        - Effect: "Allow"
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            - "arn:aws:secretsmanager:${self:provider.region}:*:secret:bravas/*"
+
+plugins:
+  - serverless-webpack
+  - serverless-offline
+
+functions:
+  main:
+    handler: dist/apps/contracts-service/handler.handler
+    events:
+      - http:
+          method: any
+          path: /{proxy+}
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3004
+
+
+
+
+
+
+

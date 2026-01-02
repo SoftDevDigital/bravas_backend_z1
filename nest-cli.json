@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "webpack": false
+  },
+  "monorepo": true,
+  "projects": {
+    "admin-service": {
+      "type": "application",
+      "root": "apps/admin-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/admin-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/admin-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "auth-service": {
+      "type": "application",
+      "root": "apps/auth-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/auth-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/auth-service/tsconfig.app.json"
+      }
+    },
+    "content-service": {
+      "type": "application",
+      "root": "apps/content-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/content-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/content-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "contracts-service": {
+      "type": "application",
+      "root": "apps/contracts-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/contracts-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/contracts-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "messages-service": {
+      "type": "application",
+      "root": "apps/messages-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/messages-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/messages-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "notification-service": {
+      "type": "application",
+      "root": "apps/notification-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/notification-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/notification-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "payment-service": {
+      "type": "application",
+      "root": "apps/payment-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/payment-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/payment-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    },
+    "user-service": {
+      "type": "application",
+      "root": "apps/user-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/user-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/user-service/tsconfig.app.json",
+        "deleteOutDir": false
+      }
+    }
+  }
+}

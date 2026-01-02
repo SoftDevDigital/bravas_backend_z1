@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/notification-service"
+  },
+  "exclude": ["node_modules", "test", "**/*spec.ts"]
+}
+
+

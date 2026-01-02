@@ -1,0 +1,42 @@
+service: bravas-messages-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: messages-service
+    DYNAMODB_CHATS_TABLE: ${env:DYNAMODB_CHATS_TABLE, 'bravas-chats-dev'}
+    DYNAMODB_MESSAGES_TABLE: ${env:DYNAMODB_MESSAGES_TABLE, 'bravas-messages-dev'}
+
+# Funciones Lambda
+functions:
+  messages:
+    handler: dist/handler.handler
+    description: Messages Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: messages/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: messages
+          method: ANY
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3003
+

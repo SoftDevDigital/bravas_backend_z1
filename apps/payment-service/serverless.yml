@@ -1,0 +1,75 @@
+service: bravas-payment-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: payment-service
+    # Stripe
+    STRIPE_SECRET_KEY_SECRET_NAME: ${env:STRIPE_SECRET_KEY_SECRET_NAME, 'bravas/stripe/secret-key'}
+    STRIPE_WEBHOOK_SECRET_SECRET_NAME: ${env:STRIPE_WEBHOOK_SECRET_SECRET_NAME, 'bravas/stripe/webhook-secret'}
+    # Precios de planes (deben configurarse en Stripe)
+    STRIPE_PRICE_BASIC: ${env:STRIPE_PRICE_BASIC}
+    STRIPE_PRICE_PREMIUM: ${env:STRIPE_PRICE_PREMIUM}
+    STRIPE_PRICE_VIP: ${env:STRIPE_PRICE_VIP}
+    # Distribución de pagos (porcentajes)
+    PAYMENT_BRAVAS_PERCENT: ${env:PAYMENT_BRAVAS_PERCENT, '20'}
+    PAYMENT_RECIPIENT_PERCENT: ${env:PAYMENT_RECIPIENT_PERCENT, '80'}
+    PAYMENT_AGENCY_PERCENT: ${env:PAYMENT_AGENCY_PERCENT, '20'}
+    # Mínimo para retiros
+    MIN_PAYOUT_AMOUNT: ${env:MIN_PAYOUT_AMOUNT, '1000'}
+    # KMS
+    KMS_KEY_ID: ${env:KMS_KEY_ID, 'alias/bravas-payment-encryption'}
+    # CloudWatch
+    ENABLE_CLOUDWATCH_METRICS: ${env:ENABLE_CLOUDWATCH_METRICS, 'true'}
+    CLOUDWATCH_NAMESPACE: ${env:CLOUDWATCH_NAMESPACE, 'Bravas/PaymentService'}
+
+# Funciones Lambda
+functions:
+  payment:
+    handler: dist/handler.handler
+    description: Payment Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: payments/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: payments
+          method: ANY
+          cors: true
+      - http:
+          path: webhooks/stripe
+          method: POST
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3002
+
+
+
+
+
+
+
+
+
+
+
+
+
+

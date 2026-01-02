@@ -1,0 +1,159 @@
+# Configuración Serverless para Automatizaciones AWS
+# Este archivo define las funciones Lambda que se activan automáticamente
+
+service: bravas-user-service-automation
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 1024
+  timeout: 300
+  environment:
+    NODE_ENV: ${self:provider.stage}
+    AWS_REGION: ${self:provider.region}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:PutObject
+        - s3:DeleteObject
+        - s3:ListBucket
+      Resource:
+        - 'arn:aws:s3:::bravas-*-${self:provider.stage}'
+        - 'arn:aws:s3:::bravas-*-${self:provider.stage}/*'
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:GetRecords
+        - dynamodb:GetShardIterator
+        - dynamodb:DescribeStream
+      Resource:
+        - 'arn:aws:dynamodb:${self:provider.region}:*:table/bravas-*-${self:provider.stage}'
+        - 'arn:aws:dynamodb:${self:provider.region}:*:table/bravas-*-${self:provider.stage}/index/*'
+        - 'arn:aws:dynamodb:${self:provider.region}:*:table/bravas-*-${self:provider.stage}/stream/*'
+    - Effect: Allow
+      Action:
+        - rekognition:DetectModerationLabels
+        - rekognition:DetectFaces
+        - rekognition:CompareFaces
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - textract:AnalyzeID
+        - textract:DetectDocumentText
+        - textract:AnalyzeDocument
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - events:PutEvents
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - sns:Publish
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: 'arn:aws:logs:*:*:*'
+
+functions:
+  # Función Lambda que se activa automáticamente cuando se sube un archivo a S3
+  processS3Upload:
+    handler: dist/handlers/lambda-handlers.s3EventHandler
+    description: 'Procesa automáticamente archivos subidos a S3 (avatares, documentos, contenido)'
+    events:
+      - s3:
+          bucket: ${self:custom.s3Buckets.avatars}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: avatars/
+      - s3:
+          bucket: ${self:custom.s3Buckets.verificationDocs}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: verifications/
+      - s3:
+          bucket: ${self:custom.s3Buckets.content}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: content/
+    environment:
+      S3_AVATARS_BUCKET: ${self:custom.s3Buckets.avatars}
+      S3_VERIFICATION_DOCS_BUCKET: ${self:custom.s3Buckets.verificationDocs}
+      S3_CONTENT_BUCKET: ${self:custom.s3Buckets.content}
+
+  # Función Lambda que se activa automáticamente cuando hay cambios en DynamoDB
+  processDynamoDBStream:
+    handler: dist/handlers/lambda-handlers.dynamoDBStreamHandler
+    description: 'Procesa automáticamente cambios en DynamoDB (actualización de estadísticas, invalidación de caché)'
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - UsersTable
+              - StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - UserProfilesTable
+              - StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - UserModelRelationsTable
+              - StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - VerificationsTable
+              - StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+
+custom:
+  s3Buckets:
+    avatars: bravas-avatars-${self:provider.stage}
+    verificationDocs: bravas-verification-docs-${self:provider.stage}
+    content: bravas-content-${self:provider.stage}
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

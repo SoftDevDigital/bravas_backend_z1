@@ -1,0 +1,6 @@
+# Stripe Price IDs - Guardados temporalmente
+
+Basic Plan: price_1Sk5HGHOPT5bOtcJvf0needx
+Premium Plan: price_1Sk5m5HOPT5bOtcJtIGQVE6X
+VIP Plan: price_1Sk5pvHOPT5bOtcJQzFc2qaa
+

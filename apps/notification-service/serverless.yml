@@ -1,0 +1,42 @@
+service: bravas-notification-service
+
+frameworkVersion: '3'
+
+# Importar configuración común
+provider: ${file(../../serverless-common.yml):provider}
+
+# Variables de entorno específicas del servicio
+provider:
+  environment:
+    SERVICE_NAME: notification-service
+    DYNAMODB_NOTIFICATIONS_TABLE: ${env:DYNAMODB_NOTIFICATIONS_TABLE, 'bravas-notifications-dev'}
+
+# Funciones Lambda
+functions:
+  notifications:
+    handler: dist/handler.handler
+    description: Notification Service - All endpoints
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: notifications/{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: notifications
+          method: ANY
+          cors: true
+
+plugins:
+  - serverless-offline
+  - serverless-webpack
+
+custom:
+  webpack:
+    webpackConfig: ../../webpack.config.js
+    includeModules: true
+  serverless-offline:
+    httpPort: 3006
+
+
