@@ -13,6 +13,7 @@ export interface SwaggerConfigOptions {
   path?: string;
   environment?: 'dev' | 'prod';
   apiBaseUrl?: string;
+  globalPrefix?: string; // Prefijo global de la API (ej: 'api/v1')
 }
 
 /**
@@ -27,9 +28,29 @@ export function setupSwagger(
   const environment = options.environment || process.env.ENVIRONMENT || 'dev';
   const isDev = environment === 'dev';
 
-  // URLs base según el entorno
-  const devUrl = options.apiBaseUrl || process.env.API_BASE_URL || 'http://localhost:3000';
-  const prodUrl = options.apiBaseUrl || process.env.API_BASE_URL || 'https://api.bravas.com';
+  // Obtener el global prefix (de las opciones o de la aplicación)
+  const globalPrefix = options.globalPrefix || 
+                            (app as any).config?.getGlobalPrefix?.() || 
+                            process.env.GLOBAL_PREFIX || 
+                            'api/v1';
+
+  // Detectar el puerto del servicio desde la aplicación o variables de entorno
+  const servicePort = process.env.PORT || 
+                      (app as any).getHttpServer?.()?.address?.()?.port ||
+                      '3000';
+  
+  // URLs base según el entorno (usar el puerto del servicio si no se especifica apiBaseUrl)
+  const baseDevUrl = options.apiBaseUrl || 
+                     process.env.API_BASE_URL || 
+                     `http://localhost:${servicePort}`;
+  const baseProdUrl = options.apiBaseUrl || 
+                     process.env.API_BASE_URL || 
+                     'https://api.bravas.com';
+  
+  // Construir URLs completas con el prefijo global para los servidores
+  // Esto asegura que Swagger apunte a las rutas correctas
+  const devUrl = globalPrefix ? `${baseDevUrl}/${globalPrefix}` : baseDevUrl;
+  const prodUrl = globalPrefix ? `${baseProdUrl}/${globalPrefix}` : baseProdUrl;
 
   const config = new DocumentBuilder()
     .setTitle(options.title || 'BRAVAS API Documentation')
@@ -142,7 +163,7 @@ Incluye el token en el header \`Authorization: Bearer <token>\`
     res.send(document);
   });
 
-  console.log(`📚 Swagger documentation available at: ${devUrl}${swaggerPath}`);
-  console.log(`📄 OpenAPI JSON available at: ${devUrl}/openapi.json`);
+  console.log(`📚 Swagger documentation available at: ${baseDevUrl}${swaggerPath}`);
+  console.log(`📄 OpenAPI JSON available at: ${baseDevUrl}/openapi.json`);
 }
 

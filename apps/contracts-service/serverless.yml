@@ -13,7 +13,7 @@ provider:
     ENVIRONMENT: ${self:provider.stage}
     PROJECT_NAME: bravas
     # URLs de otros servicios (se pueden obtener de SSM en producción)
-    USER_SERVICE_URL: http://localhost:3000/api/v1
+    USER_SERVICE_URL: http://localhost:3001/api/v1
     MESSAGES_SERVICE_URL: http://localhost:3003/api/v1
   iam:
     role:
@@ -55,6 +55,12 @@ custom:
     includeModules: true
   serverless-offline:
     httpPort: 3004
+
+
+
+
+
+
 
 
 

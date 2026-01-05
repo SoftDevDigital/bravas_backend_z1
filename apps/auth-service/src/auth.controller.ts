@@ -129,6 +129,7 @@ export class AuthController {
       success: true,
       message: 'Registro exitoso. Por favor verifica tu email con el código OTP enviado.',
       email: 'usuario@example.com',
+      role: 'model',
       requiresVerification: true,
     },
   })
@@ -256,6 +257,7 @@ Authorization: Bearer <accessToken>
         refreshToken: 'eyJraWQiOiJcL0tVbUtmSHZcL0x3XC9jT2JcL0...',
         idToken: 'eyJraWQiOiJcL0tVbUtmSHZcL0x3XC9jT2JcL0...',
         expiresIn: 3600,
+        role: 'model',
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
       },
     },

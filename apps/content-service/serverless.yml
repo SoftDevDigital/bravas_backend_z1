@@ -13,7 +13,7 @@ provider:
     ENVIRONMENT: ${self:provider.stage}
     PROJECT_NAME: bravas
     # URLs de otros servicios
-    USER_SERVICE_URL: http://localhost:3000/api/v1
+    USER_SERVICE_URL: http://localhost:3001/api/v1
     PAYMENT_SERVICE_URL: http://localhost:3002/api/v1
   iam:
     role:
@@ -64,6 +64,12 @@ custom:
     includeModules: true
   serverless-offline:
     httpPort: 3005
+
+
+
+
+
+
 
 
 

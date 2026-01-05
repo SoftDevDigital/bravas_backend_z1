@@ -52,7 +52,7 @@ export class MessagesService {
     this.messagesTable = `${projectName}-messages-${environment}`;
     
     // URLs de servicios (para integración)
-    this.paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3003/api/v1';
+    this.paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3002/api/v1';
     this.userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:3001/api/v1';
     this.notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3006/api/v1';
     

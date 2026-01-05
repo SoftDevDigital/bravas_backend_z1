@@ -44,12 +44,15 @@ import { HttpExceptionFilter, AllExceptionsFilter } from './common/filters/http-
 })
 export class AuthModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    // Aplicar rate limiting a todas las rutas excepto health checks
+    // Aplicar rate limiting a todas las rutas excepto health checks y Swagger
     consumer
       .apply(RateLimitMiddleware)
       .exclude(
         { path: 'health', method: RequestMethod.ALL },
-        { path: 'health/*path', method: RequestMethod.ALL }
+        { path: 'health/*path', method: RequestMethod.ALL },
+        { path: 'api-docs', method: RequestMethod.ALL },
+        { path: 'api-docs/*path', method: RequestMethod.ALL },
+        { path: 'openapi.json', method: RequestMethod.ALL }
       )
       .forRoutes({ path: '*path', method: RequestMethod.ALL });
   }

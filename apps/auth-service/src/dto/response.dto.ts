@@ -22,17 +22,23 @@ export class SuccessResponseDto {
  */
 export class RegisterResponseDto extends SuccessResponseDto {
   @ApiProperty({
-    description: 'ID único del usuario creado',
-    example: '550e8400-e29b-41d4-a716-446655440000',
-    format: 'uuid',
-  })
-  userId: string;
-
-  @ApiProperty({
     description: 'Email del usuario registrado',
     example: 'usuario@example.com',
   })
   email: string;
+
+  @ApiProperty({
+    description: 'Rol del usuario registrado',
+    example: 'model',
+    enum: ['user', 'model', 'agency'],
+  })
+  role: string;
+
+  @ApiPropertyOptional({
+    description: 'Indica si se requiere verificación de email',
+    example: true,
+  })
+  requiresVerification?: boolean;
 }
 
 /**
@@ -62,6 +68,13 @@ export class AuthTokensDto {
     example: 3600,
   })
   expiresIn: number;
+
+  @ApiProperty({
+    description: 'Rol del usuario autenticado',
+    example: 'model',
+    enum: ['user', 'model', 'agency', 'admin', 'support', 'moderator'],
+  })
+  role: string;
 
   @ApiPropertyOptional({
     description: 'ID único de la sesión (para gestión de multi-sesión)',

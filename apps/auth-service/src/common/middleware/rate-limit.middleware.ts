@@ -53,6 +53,11 @@ export class RateLimitMiddleware implements NestMiddleware {
   }
 
   use(req: Request, res: Response, next: NextFunction) {
+    // Excluir rutas de Swagger y documentación del rate limiting
+    if (req.path.startsWith('/api-docs') || req.path.startsWith('/openapi.json')) {
+      return next();
+    }
+
     // Determinar tipo de endpoint
     const endpointType = this.getEndpointType(req.path, req.method);
     const limit = this.limits[endpointType][this.isProduction ? 'prod' : 'dev'];
@@ -177,6 +182,9 @@ export class RateLimitMiddleware implements NestMiddleware {
     this.rateLimitStore.clear();
   }
 }
+
+
+
 
 
 

@@ -49,7 +49,7 @@ export class ContentService {
     this.postsTable = this.credentials.dynamodb.postsTable || `${projectName}-posts-${environment}`;
     this.packsTable = this.credentials.dynamodb.packsTable || `${projectName}-packs-${environment}`;
     
-    this.userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000/api/v1';
+    this.userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3001/api/v1';
     this.paymentServiceUrl = this.configService.get<string>('PAYMENT_SERVICE_URL') || 'http://localhost:3002/api/v1';
   }
 

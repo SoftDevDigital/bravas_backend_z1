@@ -78,6 +78,8 @@ tmp/
 temp/
 *.tmp
 *.bak
+*.rar
+*.zip
 
 # Excluir archivos markdown y terraform (según solicitud)
 *.md

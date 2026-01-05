@@ -147,6 +147,7 @@ export class AuthService {
         success: true,
         message: 'Registro exitoso. Por favor verifica tu email con el código OTP enviado. El código expira en 15 minutos.',
         email: registerDto.email,
+        role: registerDto.role,
         cognitoSub: cognitoResponse.UserSub, // Guardamos esto temporalmente para usar en verifyOTP
         requiresVerification: true,
       };
@@ -219,6 +220,10 @@ export class AuthService {
 
       const emailAttribute = userInfo.UserAttributes?.find((attr) => attr.Name === 'email');
       const email = emailAttribute?.Value || loginDto.email;
+      
+      // Obtener el rol del usuario
+      const roleAttribute = userInfo.UserAttributes?.find((attr) => attr.Name === 'custom:role');
+      const role = roleAttribute?.Value || 'user';
 
       // Buscar userId en DynamoDB usando el email (índice email-index en users table)
       let userId: string | undefined;
@@ -292,6 +297,7 @@ export class AuthService {
           refreshToken: response.AuthenticationResult.RefreshToken,
           idToken: response.AuthenticationResult.IdToken,
           expiresIn: response.AuthenticationResult.ExpiresIn,
+          role, // Incluir el rol del usuario
           sessionId, // Incluir sessionId (opcional, para referencia del cliente)
         },
       };
@@ -342,6 +348,21 @@ export class AuthService {
 
       const newRefreshToken = response.AuthenticationResult.RefreshToken || refreshDto.refreshToken;
 
+      // Obtener información del usuario para incluir el rol
+      let role = 'user'; // Valor por defecto
+      try {
+        const userInfo = await this.cognitoClient.send(
+          new GetUserCommand({
+            AccessToken: response.AuthenticationResult.AccessToken!,
+          }),
+        );
+        const roleAttribute = userInfo.UserAttributes?.find((attr) => attr.Name === 'custom:role');
+        role = roleAttribute?.Value || 'user';
+      } catch (error) {
+        // Si falla obtener el rol, usamos el valor por defecto
+        console.warn('No se pudo obtener el rol del usuario al refrescar token');
+      }
+
       // SINCRONIZACIÓN AUTOMÁTICA: Actualizar refreshToken en TODAS las sesiones activas
       // Esto permite que todas las sesiones del usuario se mantengan sincronizadas
       try {
@@ -371,6 +392,7 @@ export class AuthService {
           refreshToken: newRefreshToken,
           idToken: response.AuthenticationResult.IdToken,
           expiresIn: response.AuthenticationResult.ExpiresIn,
+          role, // Incluir el rol del usuario
         },
       };
     } catch (error: any) {

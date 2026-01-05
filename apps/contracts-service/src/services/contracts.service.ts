@@ -48,7 +48,7 @@ export class ContractsService {
     this.contractsTable = `${projectName}-contracts-${environment}`;
     this.proposalsTable = `${projectName}-contract-proposals-${environment}`;
     
-    this.userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000/api/v1';
+    this.userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3001/api/v1';
     this.messagesServiceUrl = this.configService.get<string>('MESSAGES_SERVICE_URL') || 'http://localhost:3003/api/v1';
     this.notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3006/api/v1';
     

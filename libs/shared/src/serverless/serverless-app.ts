@@ -109,6 +109,7 @@ export class ServerlessApp {
         setupSwagger(this.app, {
           ...this.options.swaggerConfig,
           environment: isProduction ? 'prod' : 'dev',
+          globalPrefix: this.options.globalPrefix, // Pasar el globalPrefix a Swagger
         });
       }
     }
