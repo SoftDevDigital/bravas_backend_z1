@@ -163,3 +163,4 @@ Write-Host "`n✅ Diagnóstico completado`n" -ForegroundColor Green
 
 
 
+
