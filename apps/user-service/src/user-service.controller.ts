@@ -14,7 +14,10 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import {
   ApiTags,
@@ -25,6 +28,7 @@ import {
   ApiParam,
   ApiBody,
   ApiExcludeEndpoint,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import { AuthGuard, UserRole, RolesGuard } from '@bravas/shared';
 import { UserService } from './user.service';
@@ -50,6 +54,7 @@ import {
 import { CacheService } from './services/cache.service';
 import { SanitizationService } from './services/sanitization.service';
 import { LoggerService } from './common/logger/logger.service';
+import { AvatarService } from './services/avatar.service';
 
 /**
  * Controlador del User Service
@@ -65,6 +70,7 @@ export class UserServiceController {
     private readonly cacheService: CacheService,
     private readonly sanitizationService: SanitizationService,
     private readonly configService: ConfigService,
+    private readonly avatarService: AvatarService,
   ) {
     this.logger = LoggerService.create('UserServiceController', this.configService);
   }
@@ -197,38 +203,46 @@ Obtiene el perfil completo del usuario autenticado, incluyendo información bás
    * - Usuario quiere actualizar su biografía
    * - Cambiar información personal (nombre, país)
    * - Actualizar preferencias y configuraciones
-   * - Modificar avatar (URL)
+   * - Subir/actualizar foto de perfil (archivo de imagen)
+   * - Modificar avatar (URL o archivo)
    * 
    * **CAMPOS ACTUALIZABLES:**
    * - Información personal: fullName, country, birthDate, bio
-   * - Avatar: avatarUrl (usar endpoint /users/me/avatar para subir)
+   * - Avatar: archivo de imagen (multipart/form-data) o avatarUrl (JSON)
    * - Preferencias: preferences (objeto JSON)
    * 
-   * **NOTA:** Para subir avatar, usar POST /users/me/avatar
+   * **FORMATOS SOPORTADOS:**
+   * - JSON: application/json (para actualizar campos de texto)
+   * - Multipart: multipart/form-data (para subir archivo de imagen + otros campos)
    */
   @Put('me')
   @UseGuards(AuthGuard)
+  @UseInterceptors(FileInterceptor('avatar'))
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth('JWT-auth')
+  @ApiConsumes('application/json', 'multipart/form-data')
   @ApiOperation({
     summary: '✏️ Actualizar mi perfil',
     description: `
 **¿Para qué sirve?**
-Permite al usuario autenticado actualizar su información de perfil.
+Permite al usuario autenticado actualizar su información de perfil, incluyendo la foto de perfil.
 
 **Casos de uso:**
 - Editar biografía o descripción personal
 - Actualizar información personal (nombre, país, fecha de nacimiento)
 - Cambiar preferencias y configuraciones
-- Actualizar URL de avatar (para subir archivo usar /users/me/avatar)
+- **Subir/actualizar foto de perfil directamente** (archivo de imagen)
+- Actualizar URL de avatar (alternativa a subir archivo)
 
-**Campos actualizables:**
-- \`fullName\`: Nombre completo
-- \`country\`: Código ISO del país (ej: AR, US, ES)
-- \`birthDate\`: Fecha de nacimiento (ISO 8601)
-- \`bio\`: Biografía o descripción (máx 1000 caracteres)
-- \`avatarUrl\`: URL del avatar (mejor usar endpoint de subida)
-- \`preferences\`: Objeto JSON con preferencias personalizadas
+---
+
+## 📋 FORMATOS SOPORTADOS
+
+### 1️⃣ JSON (application/json) - Sin archivo de imagen
+
+**Content-Type:** \`application/json\`
+
+**Cuándo usar:** Para actualizar solo campos de texto (nombre, bio, país, etc.) sin cambiar la foto.
 
 **Ejemplo de request:**
 \`\`\`json
@@ -236,6 +250,7 @@ Permite al usuario autenticado actualizar su información de perfil.
   "fullName": "Juan Pérez Actualizado",
   "bio": "Nueva biografía profesional",
   "country": "AR",
+  "birthDate": "1990-01-01",
   "preferences": {
     "theme": "dark",
     "language": "es",
@@ -244,36 +259,325 @@ Permite al usuario autenticado actualizar su información de perfil.
 }
 \`\`\`
 
-**Validaciones:**
+**Ejemplo con URL de avatar existente:**
+\`\`\`json
+{
+  "fullName": "Juan Pérez",
+  "avatarUrl": "https://cdn.bravas.com/avatars/user123.jpg"
+}
+\`\`\`
+
+---
+
+### 2️⃣ Multipart/form-data - Con archivo de imagen ⭐
+
+**Content-Type:** \`multipart/form-data\`
+
+**Cuándo usar:** Para subir una nueva foto de perfil junto con otros campos.
+
+**⚠️ IMPORTANTE PARA EL FRONTEND:**
+
+#### Estructura del Request:
+
+\`\`\`
+POST /api/v1/users/me
+Content-Type: multipart/form-data
+Authorization: Bearer {jwt_token}
+
+Form Data:
+  avatar: [File] (campo de archivo - REQUERIDO para subir imagen)
+  fullName: "Juan Pérez" (opcional)
+  bio: "Nueva biografía" (opcional)
+  country: "AR" (opcional)
+  birthDate: "1990-01-01" (opcional)
+  preferences: '{"theme":"dark","language":"es"}' (opcional - debe ser JSON string)
+\`\`\`
+
+#### 📝 Especificaciones del archivo:
+
+- **Nombre del campo:** \`avatar\` (exactamente así, en minúsculas)
+- **Tipo de archivo:** Archivo binario (File/Blob)
+- **Formatos permitidos:** JPEG, PNG, WebP
+- **Tamaño máximo:** 5MB (5,242,880 bytes)
+- **Recomendación:** Imagen cuadrada o rectangular, mínimo 300x300px
+
+#### 🔧 Ejemplo de código para Frontend:
+
+**JavaScript/TypeScript (Fetch API):**
+\`\`\`javascript
+const formData = new FormData();
+
+// Agregar archivo de imagen (OBLIGATORIO para subir foto)
+const fileInput = document.querySelector('input[type="file"]');
+formData.append('avatar', fileInput.files[0]);
+
+// Agregar otros campos (opcionales)
+formData.append('fullName', 'Juan Pérez');
+formData.append('bio', 'Nueva biografía profesional');
+formData.append('country', 'AR');
+formData.append('preferences', JSON.stringify({
+  theme: 'dark',
+  language: 'es',
+  notifications: true
+}));
+
+// Enviar request
+const response = await fetch('http://localhost:3001/api/v1/users/me', {
+  method: 'PUT',
+  headers: {
+    'Authorization': 'Bearer ' + token, // NO incluir Content-Type, el navegador lo hace automáticamente
+  },
+  body: formData
+});
+
+const result = await response.json();
+console.log(result);
+\`\`\`
+
+**React (con useState):**
+\`\`\`typescript
+const [file, setFile] = useState<File | null>(null);
+const [fullName, setFullName] = useState('');
+
+const handleSubmit = async () => {
+  if (!file) {
+    alert('Por favor selecciona una imagen');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('avatar', file);
+  formData.append('fullName', fullName);
+  // ... otros campos
+
+  try {
+    const response = await fetch('http://localhost:3001/api/v1/users/me', {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        // NO incluir 'Content-Type': 'multipart/form-data'
+        // El navegador lo agrega automáticamente con el boundary
+      },
+      body: formData,
+    });
+
+    const result = await response.json();
+    console.log('Perfil actualizado:', result);
+  } catch (error) {
+    console.error('Error:', error);
+  }
+};
+\`\`\`
+
+**Axios:**
+\`\`\`typescript
+import axios from 'axios';
+
+const formData = new FormData();
+formData.append('avatar', file);
+formData.append('fullName', 'Juan Pérez');
+formData.append('bio', 'Nueva biografía');
+
+await axios.put('http://localhost:3001/api/v1/users/me', formData, {
+  headers: {
+    'Authorization': 'Bearer ' + token,
+    'Content-Type': 'multipart/form-data', // Axios lo maneja automáticamente
+  },
+});
+\`\`\`
+
+**cURL (para pruebas):**
+\`\`\`bash
+curl -X PUT 'http://localhost:3001/api/v1/users/me' \\
+  -H 'Authorization: Bearer YOUR_JWT_TOKEN' \\
+  -F 'avatar=@/path/to/image.jpg' \\
+  -F 'fullName=Juan Pérez' \\
+  -F 'bio=Nueva biografía profesional' \\
+  -F 'country=AR'
+\`\`\`
+
+#### ⚠️ Puntos críticos para el Frontend:
+
+1. **NO incluir manualmente Content-Type en headers** cuando uses FormData:
+   - ❌ \`'Content-Type': 'multipart/form-data'\`
+   - ✅ Dejar que el navegador/axios lo agregue automáticamente con el boundary
+
+2. **Nombre del campo debe ser exactamente "avatar"**:
+   - ✅ \`formData.append('avatar', file)\`
+   - ❌ \`formData.append('image', file)\`
+   - ❌ \`formData.append('photo', file)\`
+
+3. **El archivo debe ser un objeto File/Blob**:
+   - ✅ \`formData.append('avatar', fileInput.files[0])\`
+   - ✅ \`formData.append('avatar', new Blob([...]))\`
+   - ❌ \`formData.append('avatar', base64String)\`
+
+4. **Preferencias en multipart debe ser JSON string**:
+   - ✅ \`formData.append('preferences', JSON.stringify({...}))\`
+   - ❌ \`formData.append('preferences', {theme: 'dark'})\`
+
+5. **Validar archivo antes de enviar**:
+   - Tipo: JPEG, PNG, WebP
+   - Tamaño: máximo 5MB
+   - Dimensiones: recomendado mínimo 300x300px
+
+#### 📤 Ejemplo de validación en Frontend:
+
+\`\`\`typescript
+const validateFile = (file: File): string | null => {
+  // Validar tipo
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedTypes.includes(file.type)) {
+    return 'Tipo de archivo no permitido. Use JPEG, PNG o WebP';
+  }
+
+  // Validar tamaño (5MB = 5 * 1024 * 1024 bytes)
+  const maxSize = 5 * 1024 * 1024;
+  if (file.size > maxSize) {
+    return 'El archivo es demasiado grande. Máximo 5MB';
+  }
+
+  return null; // Válido
+};
+
+// Usar antes de enviar
+const error = validateFile(file);
+if (error) {
+  alert(error);
+  return;
+}
+\`\`\`
+
+---
+
+## ✨ Características automáticas de la subida de avatar:
+
+- ✅ **Genera 4 tamaños automáticamente:**
+  - \`thumbnail\`: 150x150px (para listados)
+  - \`small\`: 300x300px (para tarjetas)
+  - \`medium\`: 600x600px (perfil principal)
+  - \`large\`: 1200x1200px (alta resolución)
+
+- ✅ **Optimiza imagen automáticamente** (JPEG calidad 85%, progressive)
+- ✅ **Valida tipo y tamaño** antes de procesar
+- ✅ **Modera contenido automáticamente** con AWS Rekognition
+- ✅ **Actualiza automáticamente** el \`avatarUrl\` en el perfil del usuario
+- ✅ **Almacena en S3** con URLs públicas
+
+---
+
+## ✅ Validaciones:
+
 - Solo puedes actualizar tu propio perfil
 - Campos opcionales, solo envía los que quieres actualizar
-- Fecha de nacimiento debe ser válida (ISO 8601)
-- Bio máximo 1000 caracteres
+- Fecha de nacimiento debe ser válida (ISO 8601: YYYY-MM-DD)
+- Bio máximo 2000 caracteres
+- **Archivo de avatar:**
+  - Máximo 5MB
+  - Tipos permitidos: JPEG (\`image/jpeg\`), PNG (\`image/png\`), WebP (\`image/webp\`)
+  - Recomendado: imagen cuadrada o rectangular, mínimo 300x300px
+
+---
+
+## 📥 Respuesta exitosa:
+
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "userId": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "user@example.com",
+    "fullName": "Juan Pérez",
+    "bio": "Nueva biografía profesional",
+    "avatarUrl": "https://cdn.bravas.com/avatars/user123/medium-1234567890.jpg",
+    "country": "AR",
+    "preferences": {
+      "theme": "dark",
+      "language": "es",
+      "notifications": true
+    }
+  }
+}
+\`\`\`
     `.trim(),
   })
   @ApiBody({
-    type: UpdateUserDto,
-    description: 'Campos a actualizar (todos opcionales)',
+    schema: {
+      type: 'object',
+      properties: {
+        fullName: {
+          type: 'string',
+          description: 'Nombre completo',
+          example: 'Juan Pérez',
+        },
+        country: {
+          type: 'string',
+          description: 'Código ISO del país (ej: AR, US, ES)',
+          example: 'AR',
+        },
+        birthDate: {
+          type: 'string',
+          format: 'date',
+          description: 'Fecha de nacimiento (ISO 8601)',
+          example: '1990-01-01',
+        },
+        bio: {
+          type: 'string',
+          description: 'Biografía o descripción (máx 2000 caracteres)',
+          example: 'Modelo profesional con experiencia',
+        },
+        avatar: {
+          type: 'string',
+          format: 'binary',
+          description: '📸 Archivo de imagen para foto de perfil (JPEG, PNG, WebP, máximo 5MB). Solo disponible en multipart/form-data.',
+        },
+        avatarUrl: {
+          type: 'string',
+          description: 'URL del avatar (alternativa a subir archivo). Usar cuando se envía JSON.',
+          example: 'https://cdn.bravas.com/avatars/user123.jpg',
+        },
+        preferences: {
+          type: 'object',
+          description: 'Preferencias del usuario (objeto JSON en JSON, string JSON en multipart)',
+          example: { theme: 'dark', language: 'es', notifications: true },
+        },
+      },
+      required: [],
+    },
+    description: 'Campos a actualizar (todos opcionales).\n\n**Formatos soportados:**\n- **JSON (application/json)**: Para actualizar campos de texto. Usa `avatarUrl` si quieres actualizar la URL del avatar.\n- **Multipart (multipart/form-data)**: Para subir archivo de imagen. Envía el campo `avatar` con el archivo. También puedes incluir otros campos como `fullName`, `bio`, etc.',
     examples: {
-      basic: {
-        summary: 'Actualización básica',
+      json: {
+        summary: '📄 Actualización con JSON (sin archivo)',
+        description: 'Content-Type: application/json',
         value: {
           fullName: 'Juan Pérez',
           bio: 'Modelo profesional con experiencia',
-        },
-      },
-      complete: {
-        summary: 'Actualización completa',
-        value: {
-          fullName: 'Juan Pérez',
           country: 'AR',
-          birthDate: '1990-01-01',
-          bio: 'Modelo profesional con 5 años de experiencia en la industria',
           preferences: {
             theme: 'dark',
             language: 'es',
             notifications: true,
           },
+        },
+      },
+      jsonWithAvatarUrl: {
+        summary: '📄 JSON con URL de avatar existente',
+        description: 'Si ya tienes una URL de avatar, puedes usarla directamente',
+        value: {
+          fullName: 'Juan Pérez',
+          bio: 'Modelo profesional con experiencia',
+          avatarUrl: 'https://cdn.bravas.com/avatars/user123.jpg',
+        },
+      },
+      multipart: {
+        summary: '📸 Actualización con archivo de imagen',
+        description: 'Content-Type: multipart/form-data\n\nEnvía el campo "avatar" con el archivo de imagen. También puedes incluir otros campos como fullName, bio, country, etc.',
+        value: {
+          avatar: '[archivo de imagen JPEG/PNG/WebP, máximo 5MB]',
+          fullName: 'Juan Pérez',
+          bio: 'Modelo profesional con experiencia',
+          country: 'AR',
+          preferences: '{"theme":"dark","language":"es","notifications":true}',
         },
       },
     },
@@ -291,7 +595,11 @@ Permite al usuario autenticado actualizar su información de perfil.
     status: 401,
     description: '❌ No autenticado',
   })
-  async updateMyProfile(@Request() req: any, @Body() updateDto: UpdateUserDto) {
+  async updateMyProfile(
+    @Request() req: any,
+    @Body() updateDto: UpdateUserDto,
+    @UploadedFile() avatarFile?: Express.Multer.File,
+  ) {
     const startTime = Date.now();
     let userId: string | undefined;
     
@@ -303,7 +611,37 @@ Permite al usuario autenticado actualizar su información de perfil.
         throw new ForbiddenException('No se pudo obtener el ID del usuario desde el token.');
       }
       
-      // Actualizar perfil
+      // Si se envió un archivo de avatar, procesarlo primero
+      if (avatarFile) {
+        try {
+          this.logger.log('Procesando archivo de avatar', 'updateMyProfile', { 
+            userId,
+            fileName: avatarFile.originalname,
+            fileSize: avatarFile.size,
+          });
+          
+          // Subir avatar usando AvatarService
+          const avatarResult = await this.avatarService.uploadAvatar(userId, avatarFile);
+          
+          // Agregar avatarUrl al DTO de actualización
+          updateDto.avatarUrl = avatarResult.avatarUrl;
+          
+          this.logger.log('Avatar subido exitosamente', 'updateMyProfile', { 
+            userId,
+            avatarUrl: avatarResult.avatarUrl,
+          });
+        } catch (avatarError: any) {
+          this.logger.error('Error al procesar avatar', avatarError?.stack, 'updateMyProfile', { 
+            userId,
+            error: avatarError.message,
+          });
+          // Si falla la subida del avatar, continuar con la actualización de otros campos
+          // pero lanzar un error específico
+          throw new BadRequestException(`Error al subir foto de perfil: ${avatarError.message || 'Error desconocido'}`);
+        }
+      }
+      
+      // Actualizar perfil (incluye avatarUrl si se subió un archivo)
       const result = await this.userService.updateMyProfile(userInfo.userId, userInfo.email, updateDto);
       
       // Invalidar caché del perfil
@@ -311,9 +649,15 @@ Permite al usuario autenticado actualizar su información de perfil.
       await this.cacheService.delete(cacheKey);
       
       const duration = Date.now() - startTime;
+      const fieldsUpdated = Object.keys(updateDto);
+      if (avatarFile) {
+        fieldsUpdated.push('avatar (archivo)');
+      }
+      
       this.logger.log('Perfil actualizado exitosamente', 'updateMyProfile', { 
         userId,
-        fieldsUpdated: Object.keys(updateDto),
+        fieldsUpdated,
+        hasAvatarFile: !!avatarFile,
         duration: `${duration}ms`
       });
       
@@ -323,6 +667,7 @@ Permite al usuario autenticado actualizar su información de perfil.
       this.logger.error('Error al actualizar perfil', error?.stack, 'updateMyProfile', { 
         userId,
         error: error.message,
+        hasAvatarFile: !!avatarFile,
         duration: `${duration}ms`
       });
       
