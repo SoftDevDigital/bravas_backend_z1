@@ -157,13 +157,23 @@ export class SubscriptionService {
    */
   async cancelSubscription(
     subscriptionId: string,
+    userId: string,
     cancelImmediately: boolean = false,
-  ): Promise<SubscriptionRecord> {
+  ): Promise<{
+    success: boolean;
+    data: SubscriptionRecord;
+    message: string;
+  }> {
     try {
       const subscription = await this.getSubscription(subscriptionId);
 
       if (!subscription) {
         throw new NotFoundException(`Suscripción ${subscriptionId} no encontrada`);
+      }
+
+      // Verificar que el usuario es el dueño de la suscripción
+      if (subscription.userId !== userId) {
+        throw new BadRequestException('No tienes permiso para cancelar esta suscripción');
       }
 
       // Cancelar en Stripe
@@ -183,13 +193,21 @@ export class SubscriptionService {
 
       this.logger.log('Suscripción cancelada', 'cancelSubscription', {
         subscriptionId,
+        userId,
         cancelImmediately,
       });
 
-      return updated;
+      return {
+        success: true,
+        data: updated,
+        message: cancelImmediately
+          ? 'Suscripción cancelada inmediatamente'
+          : 'Suscripción se cancelará al final del período actual',
+      };
     } catch (error: any) {
       this.logger.error('Error al cancelar suscripción', error?.stack, 'cancelSubscription', {
         subscriptionId,
+        userId,
         error: error.message,
       });
       throw error;
@@ -218,27 +236,49 @@ export class SubscriptionService {
   }
 
   /**
-   * Obtiene suscripciones activas de un usuario
+   * Obtiene suscripciones de un usuario
    */
-  async getUserSubscriptions(userId: string): Promise<SubscriptionRecord[]> {
+  async getUserSubscriptions(userId: string, status: 'active' | 'canceled' | 'all' = 'active'): Promise<{
+    success: boolean;
+    data: SubscriptionRecord[];
+  }> {
     try {
+      let filterExpression: string | undefined;
+      const expressionAttributeNames: Record<string, string> = {};
+      const expressionAttributeValues: Record<string, any> = {
+        ':userId': userId,
+      };
+
+      if (status === 'active') {
+        filterExpression = '#status IN (:active, :trialing)';
+        expressionAttributeNames['#status'] = 'status';
+        expressionAttributeValues[':active'] = 'active';
+        expressionAttributeValues[':trialing'] = 'trialing';
+      } else if (status === 'canceled') {
+        filterExpression = '#status IN (:canceled, :past_due, :unpaid)';
+        expressionAttributeNames['#status'] = 'status';
+        expressionAttributeValues[':canceled'] = 'canceled';
+        expressionAttributeValues[':past_due'] = 'past_due';
+        expressionAttributeValues[':unpaid'] = 'unpaid';
+      }
+
       const command = new QueryCommand({
         TableName: this.subscriptionsTable,
         IndexName: 'userId-createdAt-index',
         KeyConditionExpression: 'userId = :userId',
-        FilterExpression: '#status IN (:active, :trialing)',
-        ExpressionAttributeNames: {
-          '#status': 'status',
-        },
-        ExpressionAttributeValues: {
-          ':userId': userId,
-          ':active': 'active',
-          ':trialing': 'trialing',
-        },
+        ...(filterExpression && {
+          FilterExpression: filterExpression,
+          ExpressionAttributeNames: expressionAttributeNames,
+        }),
+        ExpressionAttributeValues: expressionAttributeValues,
+        ScanIndexForward: false,
       });
 
       const response = await this.dynamoClient.send(command);
-      return (response.Items || []) as SubscriptionRecord[];
+      return {
+        success: true,
+        data: (response.Items || []) as SubscriptionRecord[],
+      };
     } catch (error: any) {
       this.logger.error('Error al obtener suscripciones de usuario', error?.stack, 'getUserSubscriptions', {
         userId,

@@ -134,6 +134,10 @@ function loadFromEnvironment(): Credentials | null {
         userModelRelationsTable: process.env.DYNAMODB_USER_MODEL_RELATIONS_TABLE || '',
         modelAgencyRelationsTable: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '',
         agencyAgencyRelationsTable: process.env.DYNAMODB_AGENCY_AGENCY_RELATIONS_TABLE || '',
+        // Nuevas tablas para sistema de Follow/Likes/Comments
+        userFollowsTable: process.env.DYNAMODB_USER_FOLLOWS_TABLE || '',
+        postLikesTable: process.env.DYNAMODB_POST_LIKES_TABLE || '',
+        postCommentsTable: process.env.DYNAMODB_POST_COMMENTS_TABLE || '',
       },
       s3: {
         avatarsBucket: process.env.S3_AVATARS_BUCKET || '',

@@ -365,6 +365,129 @@ export class PaymentService {
   }
 
   /**
+   * Obtener historial de movimientos del buyer con filtros
+   */
+  async getUserMovements(
+    userId: string,
+    type: 'purchases' | 'subscriptions' | 'tips' | 'all' = 'all',
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{
+    success: boolean;
+    data: any[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    try {
+      const skip = (page - 1) * limit;
+
+      // Obtener pagos del usuario
+      const paymentsResponse = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: this.paymentsTable,
+          IndexName: 'userId-createdAt-index',
+          KeyConditionExpression: 'userId = :userId',
+          ExpressionAttributeValues: {
+            ':userId': userId,
+          },
+          ScanIndexForward: false,
+        }),
+      );
+
+      let movements: any[] = [];
+
+      // Procesar pagos según el tipo
+      if (type === 'all' || type === 'purchases' || type === 'tips') {
+        const payments = (paymentsResponse.Items || []) as PaymentRecord[];
+        
+        payments.forEach((payment) => {
+          if (type === 'all' || (type === 'purchases' && (payment.type === 'ppv' || payment.metadata?.type === 'pack_purchase')) || (type === 'tips' && payment.type === 'tip')) {
+            movements.push({
+              id: payment.paymentId,
+              type: payment.type === 'tip' ? 'tip' : 'purchase',
+              amount: payment.amount,
+              currency: payment.currency,
+              recipientId: payment.recipientId,
+              status: payment.status,
+              description: payment.metadata?.description || `Pago ${payment.type}`,
+              createdAt: payment.createdAt,
+              metadata: payment.metadata,
+            });
+          }
+        });
+      }
+
+      // Si se solicitan suscripciones, obtenerlas también
+      if (type === 'all' || type === 'subscriptions') {
+        try {
+          const subscriptionsTable = this.credentials.dynamodb?.subscriptionsTable || 'subscriptions';
+          const subscriptionsResponse = await this.dynamoClient.send(
+            new QueryCommand({
+              TableName: subscriptionsTable,
+              IndexName: 'userId-createdAt-index',
+              KeyConditionExpression: 'userId = :userId',
+              ExpressionAttributeValues: {
+                ':userId': userId,
+              },
+              ScanIndexForward: false,
+            }),
+          );
+
+          (subscriptionsResponse.Items || []).forEach((sub: any) => {
+            movements.push({
+              id: sub.subscriptionId,
+              type: 'subscription',
+              amount: sub.amount,
+              currency: sub.currency,
+              recipientId: sub.recipientId,
+              status: sub.status,
+              planType: sub.planType,
+              description: `Suscripción ${sub.planType} a modelo`,
+              createdAt: sub.createdAt,
+              currentPeriodEnd: sub.currentPeriodEnd,
+            });
+          });
+        } catch (error) {
+          // Si la tabla no existe, continuar sin suscripciones
+        }
+      }
+
+      // Ordenar por fecha (más recientes primero)
+      movements.sort((a, b) => {
+        const dateA = new Date(a.createdAt).getTime();
+        const dateB = new Date(b.createdAt).getTime();
+        return dateB - dateA;
+      });
+
+      // Aplicar paginación
+      const total = movements.length;
+      const paginatedMovements = movements.slice(skip, skip + limit);
+
+      return {
+        success: true,
+        data: paginatedMovements,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener movimientos', error?.stack, 'getUserMovements', {
+        userId,
+        type,
+        error: error.message,
+      });
+      throw new InternalServerErrorException(`Error al obtener movimientos: ${error.message}`);
+    }
+  }
+
+  /**
    * Obtiene ingresos de un creador
    */
   async getCreatorPayments(recipientId: string, limit: number = 50): Promise<PaymentRecord[]> {

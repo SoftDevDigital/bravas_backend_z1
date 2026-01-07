@@ -34,23 +34,62 @@ export function setupSwagger(
                             process.env.GLOBAL_PREFIX || 
                             'api/v1';
 
-  // Detectar el puerto del servicio desde la aplicación o variables de entorno
-  const servicePort = process.env.PORT || 
-                      (app as any).getHttpServer?.()?.address?.()?.port ||
-                      '3000';
+  // URLs base según el entorno
+  // Prioridad: options.apiBaseUrl > process.env.API_BASE_URL > detectar puerto > default
+  let baseDevUrl: string;
+  let baseProdUrl: string;
   
-  // URLs base según el entorno (usar el puerto del servicio si no se especifica apiBaseUrl)
-  const baseDevUrl = options.apiBaseUrl || 
-                     process.env.API_BASE_URL || 
-                     `http://localhost:${servicePort}`;
-  const baseProdUrl = options.apiBaseUrl || 
-                     process.env.API_BASE_URL || 
-                     'https://api.bravas.com';
+  // Si se proporciona apiBaseUrl en las opciones, usarlo directamente
+  if (options.apiBaseUrl) {
+    // Remover cualquier prefijo que pueda estar en apiBaseUrl
+    // apiBaseUrl debe ser solo: http://localhost:PORT (sin /api/v1)
+    baseDevUrl = options.apiBaseUrl.split('/api/')[0].split('/api')[0] || options.apiBaseUrl;
+    // Asegurarse de que no termine con /
+    baseDevUrl = baseDevUrl.replace(/\/$/, '');
+    baseProdUrl = process.env.API_BASE_URL || 'https://api.bravas.com';
+  } else {
+    // Si no se proporciona apiBaseUrl, detectar el puerto
+    let servicePort = '3000'; // Default para Auth Service
+    
+    if (process.env.PORT) {
+      servicePort = process.env.PORT;
+    } else if ((app as any).getHttpServer?.()?.address?.()?.port) {
+      servicePort = String((app as any).getHttpServer().address().port);
+    } else {
+      // Detectar el servicio por el nombre del módulo o SERVICE_NAME
+      const serviceName = process.env.SERVICE_NAME || '';
+      if (serviceName.includes('user')) {
+        servicePort = '3001';
+      } else if (serviceName.includes('content')) {
+        servicePort = '3005';
+      } else if (serviceName.includes('payment')) {
+        servicePort = '3002';
+      } else if (serviceName.includes('message')) {
+        servicePort = '3003';
+      } else if (serviceName.includes('contract')) {
+        servicePort = '3004';
+      } else if (serviceName.includes('notification')) {
+        servicePort = '3006';
+      } else if (serviceName.includes('admin')) {
+        servicePort = '3007';
+      }
+      // Auth Service usa 3000 por defecto
+    }
+    
+    baseDevUrl = process.env.API_BASE_URL || `http://localhost:${servicePort}`;
+    baseProdUrl = process.env.API_BASE_URL || 'https://api.bravas.com';
+  }
   
   // Construir URLs completas con el prefijo global para los servidores
-  // Esto asegura que Swagger apunte a las rutas correctas
+  // Swagger necesita la URL completa con el prefijo para que las rutas funcionen correctamente
+  // Ejemplo: http://localhost:3001/api/v1
   const devUrl = globalPrefix ? `${baseDevUrl}/${globalPrefix}` : baseDevUrl;
   const prodUrl = globalPrefix ? `${baseProdUrl}/${globalPrefix}` : baseProdUrl;
+  
+  // Log para debugging (solo en desarrollo)
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`📚 Swagger configurado con URL de desarrollo: ${devUrl}`);
+  }
 
   const config = new DocumentBuilder()
     .setTitle(options.title || 'BRAVAS API Documentation')

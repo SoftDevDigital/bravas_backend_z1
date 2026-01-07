@@ -14,6 +14,7 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -31,6 +32,7 @@ import { ContentService } from '../services/content.service';
 import { S3Service } from '../services/s3.service';
 import { CreatePostDto } from '../dto/create-post.dto';
 import { CreatePackDto } from '../dto/create-pack.dto';
+import { CreateCommentDto } from '../dto/like.dto';
 import { ApiResponseDto, PostDto, PackDto } from '../dto/response.dto';
 import { getUserFromToken } from '../helpers/auth.helper';
 import { LoggerService } from '../common/logger/logger.service';
@@ -151,14 +153,25 @@ export class ContentController {
   /**
    * GET /content/posts
    * Listar posts (feed o de un usuario)
+   * Para usuarios USER: retorna feed personalizado (modelos seguidos)
+   * Para otros roles: retorna feed global o posts de usuario específico
    */
   @Get('posts')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Listar posts',
-    description: 'Lista posts del feed global o de un usuario específico.',
+    description: `
+Lista posts según el rol del usuario:
+- **USER (comprador):** Feed personalizado con posts de modelos seguidos
+- **MODEL/AGENCY:** Feed global o posts de un usuario específico
+
+**Query params:**
+- \`userId\`: ID del usuario para filtrar posts (solo para MODEL/AGENCY)
+- \`limit\`: Límite de resultados (default: 20)
+- \`cursor\`: Cursor para paginación
+    `.trim(),
   })
-  @ApiQuery({ name: 'userId', required: false, description: 'ID del usuario para filtrar posts' })
+  @ApiQuery({ name: 'userId', required: false, description: 'ID del usuario para filtrar posts (solo para MODEL/AGENCY)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Límite de resultados (default: 20)' })
   @ApiQuery({ name: 'cursor', required: false, description: 'Cursor para paginación' })
   @ApiResponse({
@@ -173,7 +186,25 @@ export class ContentController {
     @Query('cursor') cursor?: string,
   ) {
     try {
+      const userInfo = await getUserFromToken(req.token);
       const limitNum = limit ? parseInt(limit, 10) : 20;
+
+      // Si es USER y no especificó userId, mostrar feed personalizado
+      if ((userInfo.role === 'USER' || userInfo.role === 'user') && !userId) {
+        const result = await this.contentService.getPersonalizedFeed(userInfo.userId, limitNum, cursor);
+        return {
+          success: true,
+          data: result.posts.map(p => this.contentService.mapPostToDto(p)),
+          message: 'Feed personalizado obtenido exitosamente',
+          pagination: {
+            limit: limitNum,
+            hasMore: !!result.nextCursor,
+            cursor: result.nextCursor,
+          },
+        };
+      }
+
+      // Para otros roles o si especificó userId, usar el método normal
       const result = await this.contentService.listPosts(userId, limitNum, cursor);
 
       return {
@@ -188,6 +219,103 @@ export class ContentController {
       };
     } catch (error: any) {
       this.logger.error('Error al listar posts', error?.stack, 'listPosts', {
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * GET /content/feed
+   * Obtener feed personalizado (solo para usuarios USER)
+   */
+  @Get('feed')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '📱 Obtener feed personalizado',
+    description: `
+**¿Para qué sirve?**
+Obtiene el feed personalizado del usuario autenticado con posts de los modelos que sigue.
+
+**Casos de uso:**
+- Ver contenido de modelos seguidos en orden cronológico
+- Feed personalizado basado en intereses
+- Descubrir nuevo contenido de modelos favoritos
+
+**Restricciones:**
+- Solo disponible para usuarios con rol USER
+- Si no sigues a ningún modelo, retorna feed vacío
+
+**Ejemplo de uso:**
+\`\`\`
+GET /content/feed?limit=20&cursor=eyJsYXN0S2V5IjoicG9zdF8xMjMifQ==
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "postId": "post_123",
+      "userId": "model_456",
+      "authorName": "Ana Martínez",
+      "description": "Nuevo contenido exclusivo",
+      "imageUrl": "https://...",
+      "likesCount": 25,
+      "commentsCount": 5,
+      "createdAt": "2024-01-20T15:30:00Z"
+    }
+  ],
+  "pagination": {
+    "limit": 20,
+    "hasMore": true,
+    "cursor": "eyJsYXN0S2V5IjoicG9zdF8xMjQifQ=="
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiQuery({ name: 'limit', required: false, description: 'Límite de resultados (default: 20)' })
+  @ApiQuery({ name: 'cursor', required: false, description: 'Cursor para paginación' })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Feed personalizado obtenido exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER pueden acceder al feed personalizado',
+  })
+  async getPersonalizedFeed(
+    @Request() req: any,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    try {
+      const userInfo = await getUserFromToken(req.token);
+
+      // Solo usuarios USER pueden acceder al feed personalizado
+      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+        throw new ForbiddenException('Solo usuarios con rol USER pueden acceder al feed personalizado');
+      }
+
+      const limitNum = limit ? parseInt(limit, 10) : 20;
+      const result = await this.contentService.getPersonalizedFeed(userInfo.userId, limitNum, cursor);
+
+      return {
+        success: true,
+        data: result.posts.map(p => this.contentService.mapPostToDto(p)),
+        message: 'Feed personalizado obtenido exitosamente',
+        pagination: {
+          limit: limitNum,
+          hasMore: !!result.nextCursor,
+          cursor: result.nextCursor,
+        },
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener feed personalizado', error?.stack, 'getPersonalizedFeed', {
         error: error.message,
       });
       throw error;
@@ -221,6 +349,486 @@ export class ContentController {
       };
     } catch (error: any) {
       this.logger.error('Error al obtener post', error?.stack, 'getPost', {
+        postId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * POST /content/posts/:postId/like
+   * Dar like a un post
+   */
+  @Post('posts/:postId/like')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '❤️ Dar like a un post',
+    description: `
+**¿Para qué sirve?**
+Da like a un post. Si ya le diste like, lo quita automáticamente (toggle).
+
+**Casos de uso:**
+- Dar like a posts que te gustan
+- Quitar like si cambias de opinión
+- Ver contador de likes actualizado
+
+**Comportamiento:**
+- Si no has dado like: agrega el like
+- Si ya diste like: quita el like
+- Retorna el estado actual (liked: true/false) y el contador actualizado
+
+**Ejemplo de uso:**
+\`\`\`
+POST /content/posts/post_123/like
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "postId": "post_123",
+    "liked": true,
+    "likesCount": 25
+  },
+  "message": "Like agregado exitosamente"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({ 
+    name: 'postId', 
+    description: 'ID único del post',
+    example: 'post_123',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Like agregado/removido exitosamente',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Post no encontrado',
+  })
+  async likePost(@Request() req: any, @Param('postId') postId: string) {
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      const result = await this.contentService.toggleLike(postId, userInfo.userId);
+
+      return {
+        success: true,
+        data: {
+          postId,
+          liked: result.liked,
+          likesCount: result.likesCount,
+        },
+        message: result.liked ? 'Like agregado exitosamente' : 'Like removido exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al dar like', error?.stack, 'likePost', {
+        postId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * DELETE /content/posts/:postId/like
+   * Quitar like de un post
+   */
+  @Delete('posts/:postId/like')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '💔 Quitar like de un post',
+    description: `
+**¿Para qué sirve?**
+Quita explícitamente el like de un post.
+
+**Nota:** También puedes usar \`POST /content/posts/:postId/like\` que hace toggle automático.
+
+**Casos de uso:**
+- Quitar like de forma explícita
+- Remover like sin usar toggle
+
+**Ejemplo de uso:**
+\`\`\`
+DELETE /content/posts/post_123/like
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "postId": "post_123",
+    "liked": false,
+    "likesCount": 24
+  },
+  "message": "Like removido exitosamente"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({ 
+    name: 'postId', 
+    description: 'ID único del post',
+    example: 'post_123',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Like removido exitosamente',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Post no encontrado o no has dado like',
+  })
+  async unlikePost(@Request() req: any, @Param('postId') postId: string) {
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      const result = await this.contentService.removeLike(postId, userInfo.userId);
+
+      return {
+        success: true,
+        data: {
+          postId,
+          liked: false,
+          likesCount: result.likesCount,
+        },
+        message: 'Like removido exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al quitar like', error?.stack, 'unlikePost', {
+        postId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * GET /content/posts/:postId/likes
+   * Ver quién dio like a un post
+   */
+  @Get('posts/:postId/likes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '👥 Ver quién dio like',
+    description: `
+**¿Para qué sirve?**
+Retorna la lista paginada de usuarios que dieron like a un post.
+
+**Casos de uso:**
+- Ver quién le dio like a un post
+- Mostrar lista de usuarios que interactuaron
+- Implementar funcionalidad "Ver quién le dio like"
+
+**Parámetros:**
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20, max: 100)
+
+**Ejemplo de uso:**
+\`\`\`
+GET /content/posts/post_123/likes?page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "userId": "user_123",
+      "userName": "Juan Pérez",
+      "avatar": "https://...",
+      "likedAt": "2024-01-20T15:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 25,
+    "hasMore": true
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({ 
+    name: 'postId', 
+    description: 'ID único del post',
+    example: 'post_123',
+    type: String,
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    description: '📄 Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    description: '📊 Resultados por página (default: 20, max: 100)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Lista de likes obtenida exitosamente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Post no encontrado',
+  })
+  async getPostLikes(
+    @Request() req: any,
+    @Param('postId') postId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    try {
+      const pageNum = page ? parseInt(page, 10) : 1;
+      const limitNum = limit ? parseInt(limit, 10) : 20;
+      const result = await this.contentService.getPostLikes(postId, pageNum, limitNum);
+
+      return {
+        success: true,
+        data: result.likes,
+        pagination: result.pagination,
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener likes', error?.stack, 'getPostLikes', {
+        postId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * POST /content/posts/:postId/comments
+   * Comentar en un post
+   */
+  @Post('posts/:postId/comments')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: '💬 Comentar en un post',
+    description: `
+**¿Para qué sirve?**
+Agrega un comentario a un post. Los comentarios permiten interactuar con el contenido.
+
+**Casos de uso:**
+- Comentar en posts de modelos
+- Interactuar con contenido
+- Dejar feedback o preguntas
+
+**Restricciones:**
+- El contenido del comentario no puede estar vacío
+- El contenido será sanitizado automáticamente
+- Los comentarios se ordenan por fecha (más recientes primero)
+
+**Ejemplo de uso:**
+\`\`\`
+POST /content/posts/post_123/comments
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "content": "¡Excelente post! Me encantó 😍"
+}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "commentId": "comment_123",
+    "postId": "post_123",
+    "userId": "user_456",
+    "userName": "Juan Pérez",
+    "content": "¡Excelente post! Me encantó 😍",
+    "createdAt": "2024-01-20T15:30:00Z"
+  },
+  "message": "Comentario creado exitosamente"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({ 
+    name: 'postId', 
+    description: 'ID único del post',
+    example: 'post_123',
+    type: String,
+  })
+  @ApiBody({ 
+    type: CreateCommentDto,
+    description: 'Contenido del comentario',
+    examples: {
+      ejemplo1: {
+        summary: 'Comentario simple',
+        value: {
+          content: '¡Excelente post! Me encantó 😍'
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 201,
+    description: '✅ Comentario creado exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ Contenido del comentario inválido o vacío',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Post no encontrado',
+  })
+  async createComment(
+    @Request() req: any,
+    @Param('postId') postId: string,
+    @Body() body: CreateCommentDto,
+  ) {
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      const comment = await this.contentService.createComment(
+        postId,
+        userInfo.userId,
+        userInfo.role as 'buyer' | 'model' | 'agency',
+        body.content,
+      );
+
+      return {
+        success: true,
+        data: comment,
+        message: 'Comentario creado exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al crear comentario', error?.stack, 'createComment', {
+        postId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * GET /content/posts/:postId/comments
+   * Ver comentarios de un post
+   */
+  @Get('posts/:postId/comments')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '💬 Ver comentarios de un post',
+    description: `
+**¿Para qué sirve?**
+Retorna la lista paginada de comentarios de un post, ordenados por fecha (más recientes primero).
+
+**Casos de uso:**
+- Ver todos los comentarios de un post
+- Implementar sección de comentarios en el frontend
+- Cargar comentarios de forma paginada
+
+**Parámetros:**
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20, max: 100)
+
+**Ejemplo de uso:**
+\`\`\`
+GET /content/posts/post_123/comments?page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "commentId": "comment_123",
+      "userId": "user_456",
+      "userName": "Juan Pérez",
+      "avatar": "https://...",
+      "content": "¡Excelente post!",
+      "createdAt": "2024-01-20T15:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 5,
+    "hasMore": false
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({ 
+    name: 'postId', 
+    description: 'ID único del post',
+    example: 'post_123',
+    type: String,
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    description: '📄 Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    description: '📊 Resultados por página (default: 20, max: 100)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Comentarios obtenidos exitosamente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Post no encontrado',
+  })
+  async getPostComments(
+    @Request() req: any,
+    @Param('postId') postId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    try {
+      const pageNum = page ? parseInt(page, 10) : 1;
+      const limitNum = limit ? parseInt(limit, 10) : 20;
+      const result = await this.contentService.getPostComments(postId, pageNum, limitNum);
+
+      return {
+        success: true,
+        data: result.comments,
+        pagination: result.pagination,
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener comentarios', error?.stack, 'getPostComments', {
         postId,
         error: error.message,
       });
@@ -602,6 +1210,125 @@ export class ContentController {
     } catch (error: any) {
       this.logger.error('Error al comprar pack', error?.stack, 'purchasePack', {
         packId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * GET /content/packs/purchased
+   * Listar packs comprados por el buyer autenticado
+   */
+  @Get('packs/purchased')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '📦 Mis packs comprados',
+    description: `
+**¿Para qué sirve?**
+Retorna todos los packs que el usuario autenticado (buyer) ha comprado, ordenados por fecha de compra (más recientes primero).
+
+**Casos de uso:**
+- Ver biblioteca de contenido comprado
+- Acceder a packs adquiridos
+- Ver historial de compras de packs
+- Implementar sección "Mi biblioteca" en el frontend
+
+**Restricciones:**
+- Solo disponible para usuarios con rol USER
+- Solo muestra packs con estado de pago exitoso
+- Los packs están ordenados por fecha de compra (más recientes primero)
+
+**Parámetros:**
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20, max: 100)
+
+**Ejemplo de uso:**
+\`\`\`
+GET /content/packs/purchased?page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "pack_123",
+      "modelId": "model_456",
+      "modelName": "Ana Martínez",
+      "title": "Pack Premium",
+      "description": "Contenido exclusivo",
+      "price": 49.99,
+      "imageUrl": "https://...",
+      "purchasedAt": "2024-01-20T15:30:00Z",
+      "status": "purchased"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 5,
+    "hasMore": false
+  },
+  "message": "Packs comprados obtenidos exitosamente"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    description: '📄 Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    description: '📊 Resultados por página (default: 20, max: 100)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Packs comprados obtenidos exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER pueden ver sus packs comprados',
+  })
+  async getPurchasedPacks(
+    @Request() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    try {
+      const userInfo = await getUserFromToken(req.token);
+
+      // Solo usuarios USER pueden ver sus packs comprados
+      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+        throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus packs comprados');
+      }
+
+      const pageNum = page ? parseInt(page, 10) : 1;
+      const limitNum = limit ? parseInt(limit, 10) : 20;
+      const result = await this.contentService.getPurchasedPacks(userInfo.userId, pageNum, limitNum);
+
+      return {
+        success: true,
+        data: result.packs.map(p => this.contentService.mapPackToDto(p)),
+        pagination: result.pagination,
+        message: 'Packs comprados obtenidos exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener packs comprados', error?.stack, 'getPurchasedPacks', {
         error: error.message,
       });
       throw error;

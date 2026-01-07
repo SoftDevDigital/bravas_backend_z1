@@ -34,6 +34,7 @@ import { MarketplaceQueryDto } from './dto/marketplace.dto';
 import { ApplyAgencyDto, ProposeRepresentationDto, ContactAgencyDto } from './dto/relation.dto';
 import { UpdateUserStatusDto, ApproveUserDto, SupportNotesDto } from './dto/admin.dto';
 import { StatsQueryDto } from './dto/stats.dto';
+import { FollowModelDto } from './dto/follow.dto';
 import { getUserFromToken } from './helpers/auth.helper';
 import {
   ApiResponseDto,
@@ -336,142 +337,10 @@ Permite al usuario autenticado actualizar su información de perfil.
   }
 
   /**
-   * GET /users/:id
-   * Obtener perfil público de usuario
-   * 
-   * **CASOS DE USO:**
-   * - Ver perfil público de cualquier usuario
-   * - Ver perfil de modelo en el marketplace
-   * - Ver perfil de agencia
-   * - Obtener información básica sin autenticación
-   * 
-   * **INFORMACIÓN VISIBLE:**
-   * - Sin token: Solo información pública básica
-   * - Con token: Información adicional según permisos
-   * - Admins: Ver toda la información
-   * 
-   * **NOTA:** Para perfiles específicos de modelos/agencias, usar endpoints dedicados
-   */
-  @Get(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: '👤 Obtener perfil público de usuario',
-    description: `
-**¿Para qué sirve?**
-Obtiene el perfil público de cualquier usuario. La información mostrada varía según:
-- Si estás autenticado o no
-- Tu rol (admin ve más información)
-- El rol del usuario consultado
-
-**Casos de uso:**
-- Ver perfil de usuario sin necesidad de autenticación
-- Mostrar información básica en listados
-- Ver perfil de modelo o agencia desde el marketplace
-- Obtener datos públicos para compartir
-
-**Información visible según contexto:**
-- **Sin autenticación:** Solo datos públicos básicos
-- **Autenticado:** Información adicional según permisos
-- **Admin:** Acceso completo a toda la información
-
-**Ejemplo de request:**
-\`\`\`
-GET /users/550e8400-e29b-41d4-a716-446655440000
-Authorization: Bearer {token} (opcional)
-\`\`\`
-
-**Ejemplo de respuesta (público):**
-\`\`\`json
-{
-  "success": true,
-  "data": {
-    "userId": "550e8400-e29b-41d4-a716-446655440000",
-    "email": "usuario@example.com",
-    "fullName": "Juan Pérez",
-    "role": "MODEL",
-    "verified": true,
-    "bio": "Modelo profesional...",
-    "avatarUrl": "https://cdn.bravas.com/avatars/user123.jpg",
-    "country": "AR",
-    "createdAt": "2024-01-15T10:30:00Z"
-  }
-}
-\`\`\`
-
-**Para perfiles específicos:**
-- Modelos: \`GET /users/models/:id\` (más información)
-- Agencias: \`GET /users/agencies/:id\` (más información)
-    `.trim(),
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del usuario',
-    example: '550e8400-e29b-41d4-a716-446655440000',
-    type: String,
-  })
-  @ApiResponse({
-    status: 200,
-    description: '✅ Perfil público obtenido exitosamente',
-    type: ApiResponseDto<UserProfileDto>,
-  })
-  @ApiResponse({
-    status: 404,
-    description: '❌ Usuario no encontrado',
-  })
-  async getPublicProfile(
-    @Param('id') userId: string,
-    @Request() req: any,
-  ) {
-    // Intentar obtener rol del solicitante si hay token
-    let requesterRole: UserRole | undefined;
-    try {
-      if (req.headers.authorization) {
-        const token = req.headers.authorization.split(' ')[1];
-        const userInfo = await getUserFromToken(token);
-        requesterRole = userInfo.role as UserRole;
-      }
-    } catch (error) {
-      // Si falla, continuar sin rol (perfil público)
-    }
-
-    return this.userService.getPublicProfile(userId, requesterRole);
-  }
-
-  /**
-   * GET /users
-   * Listar usuarios (solo admins)
-   * 
-   * **Endpoint Privado** - Requiere autenticación y rol de admin
-   */
-  @Get()
-  @UseGuards(AuthGuard)
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth('JWT-auth')
-  @ApiOperation({
-    summary: 'Listar usuarios (Solo Admins)',
-    description: 'Lista usuarios con filtros y paginación. ' +
-      'Solo disponible para administradores.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de usuarios obtenida exitosamente',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'No autenticado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'No tienes permisos (solo admins)',
-  })
-  async listUsers(@Query() listDto: ListUsersDto, @Request() req: any) {
-    const userInfo = await getUserFromToken(req.token);
-    return this.userService.listUsers(listDto, userInfo.role as UserRole);
-  }
-
-  /**
    * GET /users/models
    * Listar modelos en el marketplace
+   * 
+   * **IMPORTANTE:** Esta ruta debe estar ANTES de @Get(':id') para evitar conflictos
    * 
    * **CASOS DE USO:**
    * - Buscar modelos en el marketplace
@@ -654,17 +523,107 @@ GET /users/models?sortBy=totalSales&order=desc&limit=50
   }
 
   /**
+   * GET /users/search
+   * Búsqueda global (modelos, packs, usuarios)
+   */
+  @Get('search')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '🔍 Búsqueda global',
+    description: `
+**¿Para qué sirve?**
+Búsqueda global que permite encontrar modelos, packs y usuarios en toda la plataforma.
+
+**Casos de uso:**
+- Buscar modelos por nombre
+- Buscar packs por nombre o descripción
+- Buscar usuarios
+- Búsqueda unificada desde un solo endpoint
+
+**Parámetros:**
+- \`q\`: Término de búsqueda (requerido)
+- \`type\`: Tipo de búsqueda (models, packs, users, all)
+- \`page\`: Número de página
+- \`limit\`: Resultados por página
+
+**Ejemplo de uso:**
+\`\`\`
+GET /users/search?q=ana&type=models&page=1&limit=20
+\`\`\`
+    `.trim(),
+  })
+  @ApiQuery({
+    name: 'q',
+    required: true,
+    description: '🔎 Término de búsqueda',
+    example: 'ana',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'type',
+    required: false,
+    enum: ['models', 'packs', 'users', 'all'],
+    description: 'Tipo de búsqueda',
+    example: 'all',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    description: 'Número de página',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Resultados por página',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Resultados de búsqueda obtenidos exitosamente',
+  })
+  async globalSearch(
+    @Query('q') query: string,
+    @Query('type') type?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!query || query.trim().length === 0) {
+      throw new BadRequestException('El término de búsqueda (q) es requerido');
+    }
+
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+    
+    // Validar y convertir el tipo de búsqueda
+    const validTypes = ['users', 'models', 'packs', 'all'] as const;
+    const searchType = (type && validTypes.includes(type as any)) 
+      ? (type as 'users' | 'models' | 'packs' | 'all')
+      : 'all';
+
+    return this.userService.globalSearch(query.trim(), searchType, pageNum, limitNum);
+  }
+
+  /**
    * GET /users/agencies
    * Listar agencias en el marketplace
+   * 
+   * **IMPORTANTE:** Esta ruta debe estar ANTES de @Get(':id') para evitar conflictos
    * 
    * **CASOS DE USO:**
    * - Buscar agencias disponibles
    * - Filtrar agencias por país, verificación
    * - Ver agencias para postularse (modelos)
    * - Contactar agencias (otras agencias)
+   * 
+   * **RESTRICCIÓN:** No disponible para usuarios con rol USER (compradores)
    */
   @Get('agencies')
+  @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: '🏢 Listar agencias en el marketplace',
     description: `
@@ -676,6 +635,10 @@ Obtiene una lista paginada de agencias disponibles en el marketplace con filtros
 - Ver marketplace de agencias
 - Filtrar agencias por país o verificación
 - Buscar agencias específicas por nombre
+
+**Restricciones:**
+- ❌ No disponible para usuarios con rol USER (compradores)
+- ✅ Disponible para modelos, agencias y administradores
 
 **Filtros disponibles:**
 - \`search\`: Búsqueda por texto en nombre o email
@@ -689,6 +652,7 @@ Obtiene una lista paginada de agencias disponibles en el marketplace con filtros
 **Ejemplo de uso:**
 \`\`\`
 GET /users/agencies?verified=true&country=AR&sortBy=name&order=asc
+Authorization: Bearer {token}
 \`\`\`
 
 **Ejemplo de respuesta:**
@@ -769,7 +733,16 @@ GET /users/agencies?verified=true&country=AR&sortBy=name&order=asc
     description: '✅ Lista de agencias obtenida exitosamente',
     type: ApiResponseDto<AgencyProfileDto[]>,
   })
-  async listAgencies(@Query() query: MarketplaceQueryDto) {
+  @ApiResponse({
+    status: 403,
+    description: '❌ No disponible para usuarios con rol USER',
+  })
+  async listAgencies(@Query() query: MarketplaceQueryDto, @Request() req: any) {
+    // Verificar que el usuario no sea USER
+    const userInfo = await getUserFromToken(req.token);
+    if (userInfo.role === 'USER' || userInfo.role === 'user') {
+      throw new ForbiddenException('Este endpoint no está disponible para usuarios con rol USER (compradores)');
+    }
     const startTime = Date.now();
     
     try {
@@ -1540,9 +1513,13 @@ Authorization: Bearer {token} (opcional)
    * - Ver modelos gestionados por la agencia
    * - Contactar agencia
    * - Analizar agencia para partnership
+   * 
+   * **RESTRICCIÓN:** No disponible para usuarios con rol USER (compradores)
    */
   @Get('agencies/:id')
+  @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: '🏢 Obtener perfil de agencia específica',
     description: `
@@ -1555,6 +1532,10 @@ Obtiene el perfil detallado de una agencia específica con información extendid
 - Ver modelos gestionados por la agencia (si aplica)
 - Analizar agencia para partnership o negociación
 
+**Restricciones:**
+- ❌ No disponible para usuarios con rol USER (compradores)
+- ✅ Disponible para modelos, agencias y administradores
+
 **Información incluida:**
 - Datos básicos: nombre, email, bio, avatar
 - Información de agencia: nombre de agencia, tipo
@@ -1563,14 +1544,13 @@ Obtiene el perfil detallado de una agencia específica con información extendid
 - Información de perfil extendido
 
 **Permisos de visualización:**
-- **Sin autenticación:** Solo información pública básica
-- **Autenticado:** Información pública extendida
+- **Autenticado (MODEL/AGENCY):** Información pública extendida
 - **Admin:** Toda la información incluyendo estadísticas
 
 **Ejemplo de uso:**
 \`\`\`
 GET /users/agencies/550e8400-e29b-41d4-a716-446655440000
-Authorization: Bearer {token} (opcional)
+Authorization: Bearer {token}
 \`\`\`
 
 **Ejemplo de respuesta:**
@@ -1610,6 +1590,10 @@ Authorization: Bearer {token} (opcional)
     type: ApiResponseDto<AgencyProfileDto>,
   })
   @ApiResponse({
+    status: 403,
+    description: '❌ No disponible para usuarios con rol USER',
+  })
+  @ApiResponse({
     status: 404,
     description: '❌ Agencia no encontrada',
   })
@@ -1621,16 +1605,13 @@ Authorization: Bearer {token} (opcional)
     @Param('id') agencyId: string,
     @Request() req: any,
   ) {
-    let requesterRole: UserRole | undefined;
-    try {
-      if (req.headers.authorization) {
-        const token = req.headers.authorization.split(' ')[1];
-        const userInfo = await getUserFromToken(token);
-        requesterRole = userInfo.role as UserRole;
-      }
-    } catch (error) {
-      // Continuar sin rol
+    // Verificar que el usuario no sea USER
+    const userInfo = await getUserFromToken(req.token);
+    if (userInfo.role === 'USER' || userInfo.role === 'user') {
+      throw new ForbiddenException('Este endpoint no está disponible para usuarios con rol USER (compradores)');
     }
+    
+    const requesterRole = userInfo.role as UserRole;
 
     return this.userService.getAgencyProfile(agencyId, requesterRole);
   }
@@ -1876,6 +1857,77 @@ Authorization: Bearer {token}
   }
 
   /**
+   * GET /users/me/buyer-stats
+   * Estadísticas del buyer (solo para usuarios USER)
+   */
+  @Get('me/buyer-stats')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '📊 Mis estadísticas como comprador',
+    description: `
+**¿Para qué sirve?**
+Obtiene estadísticas completas del usuario autenticado como comprador (rol USER).
+
+**Métricas incluidas:**
+- \`totalSpent\`: Total gastado en la plataforma (en USD)
+- \`packsPurchased\`: Número de packs comprados
+- \`activeSubscriptions\`: Cantidad de suscripciones activas
+- \`modelsFollowing\`: Cantidad de modelos que sigue
+- \`totalTips\`: Cantidad de tips enviados
+- \`totalTipsAmount\`: Monto total de tips enviados (en USD)
+
+**Casos de uso:**
+- Mostrar dashboard personal del buyer
+- Ver resumen de actividad y gastos
+- Implementar sección de estadísticas en perfil
+
+**Restricciones:**
+- Solo disponible para usuarios con rol USER
+- Requiere autenticación
+
+**Ejemplo de uso:**
+\`\`\`
+GET /users/me/buyer-stats
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "totalSpent": 150.50,
+    "packsPurchased": 5,
+    "activeSubscriptions": 2,
+    "modelsFollowing": 10,
+    "totalTips": 3,
+    "totalTipsAmount": 25.00
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Estadísticas obtenidas exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER pueden ver estas estadísticas',
+  })
+  async getBuyerStats(@Request() req: any) {
+    const userInfo = await getUserFromToken(req.token);
+    
+    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+      throw new ForbiddenException('Solo usuarios con rol USER pueden ver estas estadísticas');
+    }
+
+    return this.userService.getBuyerStats(userInfo.userId);
+  }
+
+  /**
    * GET /users/stats
    * Estadísticas generales de la plataforma (solo admins)
    * 
@@ -2089,5 +2141,241 @@ Authorization: Bearer {admin_token}
     }
 
     return this.userService.addSupportNotes(userId, body.notes, userInfo.userId);
+  }
+
+  /**
+   * POST /users/models/:modelId/follow
+   * Seguir a un modelo
+   * 
+   * **CASOS DE USO:**
+   * - Usuario quiere seguir a un modelo para ver su contenido
+   * - Agregar modelo a la lista de seguidos
+   * - Recibir actualizaciones del modelo en el feed
+   */
+  @Post('models/:modelId/follow')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '👥 Seguir a un modelo',
+    description: `
+**¿Para qué sirve?**
+Permite a un usuario seguir a un modelo para ver su contenido en el feed personalizado.
+
+**Casos de uso:**
+- Seguir modelos para ver sus posts en el feed
+- Mantener lista de modelos favoritos
+- Recibir notificaciones de nuevos posts
+
+**Restricciones:**
+- Solo usuarios con rol USER pueden seguir modelos
+- No puedes seguirte a ti mismo
+- Si ya sigues al modelo, retorna éxito sin duplicar
+
+**Ejemplo de uso:**
+\`\`\`
+POST /users/models/550e8400-e29b-41d4-a716-446655440000/follow
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "message": "Ahora sigues a este modelo",
+  "data": {
+    "userId": "user_123",
+    "modelId": "550e8400-e29b-41d4-a716-446655440000",
+    "followedAt": "2024-01-20T15:30:00Z"
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({
+    name: 'modelId',
+    description: 'ID único del modelo a seguir',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    type: String,
+  })
+  @ApiResponse({
+    status: 201,
+    description: '✅ Ahora sigues a este modelo',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ No puedes seguirte a ti mismo o el usuario no es un modelo',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER pueden seguir modelos',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Modelo no encontrado',
+  })
+  async followModel(@Param('modelId') modelId: string, @Request() req: any) {
+    const userInfo = await getUserFromToken(req.token);
+    
+    // Solo usuarios USER pueden seguir modelos
+    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+      throw new ForbiddenException('Solo usuarios con rol USER pueden seguir modelos');
+    }
+
+    return this.userService.followModel(userInfo.userId, modelId);
+  }
+
+  /**
+   * DELETE /users/models/:modelId/follow
+   * Dejar de seguir a un modelo
+   */
+  @Delete('models/:modelId/follow')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '👥 Dejar de seguir a un modelo',
+    description: 'Deja de seguir a un modelo. Ya no verás su contenido en tu feed personalizado.',
+  })
+  @ApiParam({
+    name: 'modelId',
+    description: 'ID único del modelo a dejar de seguir',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Dejaste de seguir a este modelo',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ No estás siguiendo a este modelo',
+  })
+  async unfollowModel(@Param('modelId') modelId: string, @Request() req: any) {
+    const userInfo = await getUserFromToken(req.token);
+    
+    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+      throw new ForbiddenException('Solo usuarios con rol USER pueden dejar de seguir modelos');
+    }
+
+    return this.userService.unfollowModel(userInfo.userId, modelId);
+  }
+
+  /**
+   * GET /users/me/following
+   * Listar modelos que sigo
+   */
+  @Get('me/following')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '👥 Listar modelos que sigo',
+    description: 'Retorna la lista de modelos que el usuario autenticado está siguiendo.',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    description: '📄 Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: '📊 Resultados por página (default: 20)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Lista de modelos seguidos obtenida exitosamente',
+    type: ApiResponseDto<ModelProfileDto[]>,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  async getFollowing(
+    @Request() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userInfo = await getUserFromToken(req.token);
+    
+    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+      throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus seguidos');
+    }
+
+    return this.userService.getFollowing(
+      userInfo.userId,
+      parseInt(page || '1'),
+      parseInt(limit || '20')
+    );
+  }
+
+  /**
+   * GET /users/:id/followers
+   * Ver seguidores de un usuario (solo para modelos)
+   */
+  @Get(':id/followers')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '👥 Ver seguidores de un usuario',
+    description: 'Retorna la lista de usuarios que siguen a este modelo. Solo disponible para modelos.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID único del modelo',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    description: '📄 Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: '📊 Resultados por página (default: 20)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Lista de seguidores obtenida exitosamente',
+    type: ApiResponseDto<UserProfileDto[]>,
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ El usuario no es un modelo',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Usuario no encontrado',
+  })
+  async getFollowers(
+    @Param('id') userId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.userService.getFollowers(
+      userId,
+      parseInt(page || '1'),
+      parseInt(limit || '20')
+    );
   }
 }

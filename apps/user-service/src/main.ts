@@ -86,6 +86,7 @@ Para problemas o preguntas, contacta al equipo de desarrollo.
       version: '1.0.0',
       path: '/api-docs',
       environment: (process.env.ENVIRONMENT as 'dev' | 'prod') || 'dev',
+      apiBaseUrl: `http://localhost:${process.env.PORT || 3001}`,
     },
   });
 

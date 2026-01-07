@@ -13,9 +13,10 @@ import {
   UpdateCommand,
   DeleteCommand,
   ScanCommand,
+  BatchGetCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { AWSClientFactory, loadCredentials } from '@bravas/shared';
-import { PostRecord, PackRecord, generatePostId, generatePackId } from './database-schema.service';
+import { PostRecord, PackRecord, PostLikeRecord, PostCommentRecord, generatePostId, generatePackId, generateCommentId } from './database-schema.service';
 import { CreatePostDto } from '../dto/create-post.dto';
 import { CreatePackDto } from '../dto/create-pack.dto';
 import { LoggerService } from '../common/logger/logger.service';
@@ -176,6 +177,124 @@ export class ContentService {
     } catch (error: any) {
       this.logger.error('Error al listar posts', error?.stack, 'listPosts', {
         userId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener feed personalizado (posts de modelos seguidos)
+   */
+  async getPersonalizedFeed(buyerId: string, limit: number = 20, cursor?: string): Promise<{
+    posts: PostRecord[];
+    nextCursor?: string;
+  }> {
+    try {
+      // Obtener modelos seguidos desde user-service
+      let followingModelIds: string[] = [];
+      try {
+        const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+        const response = await this.dynamoClient.send(
+          new QueryCommand({
+            TableName: followTable,
+            KeyConditionExpression: 'userId = :userId',
+            ExpressionAttributeValues: {
+              ':userId': buyerId,
+            },
+            ProjectionExpression: 'modelId',
+          }),
+        );
+        followingModelIds = (response.Items || []).map((item) => item.modelId);
+      } catch (error) {
+        // Si la tabla no existe o hay error, retornar feed vacío
+        this.logger.warn('No se pudo obtener modelos seguidos', 'getPersonalizedFeed', {
+          buyerId,
+          error: (error as Error).message,
+        });
+        return { posts: [], nextCursor: undefined };
+      }
+
+      if (followingModelIds.length === 0) {
+        // Si no sigue a nadie, retornar feed vacío o posts sugeridos
+        return { posts: [], nextCursor: undefined };
+      }
+
+      // Obtener posts de los modelos seguidos
+      // Usar BatchGet o múltiples queries
+      const allPosts: PostRecord[] = [];
+      
+      // Hacer queries en paralelo para cada modelo
+      const postQueries = await Promise.all(
+        followingModelIds.map(async (modelId) => {
+          try {
+            const response = await this.dynamoClient.send(
+              new QueryCommand({
+                TableName: this.postsTable,
+                IndexName: 'userId-createdAt-index',
+                KeyConditionExpression: 'userId = :userId',
+                FilterExpression: '#status = :active',
+                ExpressionAttributeNames: {
+                  '#status': 'status',
+                },
+                ExpressionAttributeValues: {
+                  ':userId': modelId,
+                  ':active': 'active',
+                },
+                ScanIndexForward: false,
+                Limit: 50, // Obtener más posts por modelo para luego ordenar
+              }),
+            );
+            return (response.Items || []) as PostRecord[];
+          } catch (error) {
+            return [];
+          }
+        })
+      );
+
+      // Combinar todos los posts
+      postQueries.forEach((modelPosts) => {
+        allPosts.push(...modelPosts);
+      });
+
+      // Ordenar por fecha (más recientes primero)
+      allPosts.sort((a, b) => b.createdAtTimestamp - a.createdAtTimestamp);
+
+      // Aplicar paginación
+      let startIndex = 0;
+      if (cursor) {
+        try {
+          const cursorData = JSON.parse(cursor);
+          const lastPostId = cursorData.lastKey;
+          startIndex = allPosts.findIndex((p) => p.postId === lastPostId) + 1;
+          if (startIndex === 0) startIndex = 0; // Si no encuentra, empezar desde el inicio
+        } catch (error) {
+          startIndex = 0;
+        }
+      }
+
+      const paginatedPosts = allPosts.slice(startIndex, startIndex + limit);
+
+      // Enriquecer con información de usuarios
+      if (this.httpService) {
+        await Promise.all(
+          paginatedPosts.map(async (post) => {
+            if (!post.authorName) {
+              await this.enrichPostWithUserInfo(post);
+            }
+          })
+        );
+      }
+
+      const nextCursor =
+        startIndex + limit < allPosts.length
+          ? JSON.stringify({ lastKey: paginatedPosts[paginatedPosts.length - 1]?.postId })
+          : undefined;
+
+      return { posts: paginatedPosts, nextCursor };
+    } catch (error: any) {
+      this.logger.error('Error al obtener feed personalizado', error?.stack, 'getPersonalizedFeed', {
+        buyerId,
         error: error.message,
       });
       throw error;
@@ -755,6 +874,495 @@ export class ContentService {
       status: record.status,
       createdAt: record.createdAt ? new Date(record.createdAt).toISOString() : undefined,
     };
+  }
+
+  /**
+   * Tablas para likes y comentarios
+   */
+  private get likesTable(): string {
+    return this.credentials.dynamodb.postLikesTable || 'post_likes';
+  }
+
+  private get commentsTable(): string {
+    return this.credentials.dynamodb.postCommentsTable || 'post_comments';
+  }
+
+  /**
+   * Dar/quitar like a un post (toggle)
+   */
+  async toggleLike(postId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
+    try {
+      // Verificar que el post existe
+      const post = await this.getPostById(postId);
+
+      // Verificar si ya le dio like
+      const existingLike = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.likesTable,
+          Key: {
+            postId,
+            userId,
+          },
+        }),
+      );
+
+      const now = Date.now();
+      let liked = false;
+      let likesCount = post.likesCount || 0;
+
+      if (existingLike.Item) {
+        // Quitar like
+        await this.dynamoClient.send(
+          new DeleteCommand({
+            TableName: this.likesTable,
+            Key: {
+              postId,
+              userId,
+            },
+          }),
+        );
+        likesCount = Math.max(0, likesCount - 1);
+        liked = false;
+      } else {
+        // Agregar like
+        const likeRecord: PostLikeRecord = {
+          postId,
+          userId,
+          createdAt: new Date().toISOString(),
+          createdAtTimestamp: now,
+        };
+
+        await this.dynamoClient.send(
+          new PutCommand({
+            TableName: this.likesTable,
+            Item: likeRecord,
+          }),
+        );
+        likesCount += 1;
+        liked = true;
+      }
+
+      // Actualizar contador en el post
+      await this.dynamoClient.send(
+        new UpdateCommand({
+          TableName: this.postsTable,
+          Key: { postId },
+          UpdateExpression: 'SET likesCount = :count, updatedAtTimestamp = :updatedAt',
+          ExpressionAttributeValues: {
+            ':count': likesCount,
+            ':updatedAt': now,
+          },
+        }),
+      );
+
+      return { liked, likesCount };
+    } catch (error: any) {
+      this.logger.error('Error al toggle like', error?.stack, 'toggleLike', {
+        postId,
+        userId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Quitar like de un post
+   */
+  async removeLike(postId: string, userId: string): Promise<{ likesCount: number }> {
+    try {
+      const post = await this.getPostById(postId);
+
+      // Verificar si le dio like
+      const existingLike = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.likesTable,
+          Key: {
+            postId,
+            userId,
+          },
+        }),
+      );
+
+      if (!existingLike.Item) {
+        // Ya no le dio like, retornar contador actual
+        return { likesCount: post.likesCount || 0 };
+      }
+
+      // Eliminar like
+      await this.dynamoClient.send(
+        new DeleteCommand({
+          TableName: this.likesTable,
+          Key: {
+            postId,
+            userId,
+          },
+        }),
+      );
+
+      const likesCount = Math.max(0, (post.likesCount || 0) - 1);
+
+      // Actualizar contador en el post
+      await this.dynamoClient.send(
+        new UpdateCommand({
+          TableName: this.postsTable,
+          Key: { postId },
+          UpdateExpression: 'SET likesCount = :count, updatedAtTimestamp = :updatedAt',
+          ExpressionAttributeValues: {
+            ':count': likesCount,
+            ':updatedAt': Date.now(),
+          },
+        }),
+      );
+
+      return { likesCount };
+    } catch (error: any) {
+      this.logger.error('Error al remover like', error?.stack, 'removeLike', {
+        postId,
+        userId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener lista de usuarios que dieron like
+   */
+  async getPostLikes(postId: string, page: number = 1, limit: number = 20): Promise<{
+    likes: any[];
+    pagination: any;
+  }> {
+    try {
+      const skip = (page - 1) * limit;
+
+      const response = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: this.likesTable,
+          KeyConditionExpression: 'postId = :postId',
+          ExpressionAttributeValues: {
+            ':postId': postId,
+          },
+          ScanIndexForward: false,
+        }),
+      );
+
+      if (!response.Items || response.Items.length === 0) {
+        return {
+          likes: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      // Obtener información de usuarios
+      const userIds = response.Items.map((item) => item.userId);
+      const users = await Promise.all(
+        userIds.map(async (userId) => {
+          try {
+            if (this.httpService) {
+              const userResponse: any = await firstValueFrom(
+                this.httpService.get(`${this.userServiceUrl}/users/${userId}`)
+              );
+              return userResponse.data?.data;
+            }
+            return null;
+          } catch (error) {
+            return null;
+          }
+        })
+      );
+
+      const likes = users
+        .filter((user): user is NonNullable<typeof user> => user !== null)
+        .slice(skip, skip + limit)
+        .map((user: any) => ({
+          userId: user.id || user.userId,
+          fullName: user.fullName,
+          avatarUrl: user.avatarUrl || user.profile?.avatarUrl,
+        }));
+
+      return {
+        likes,
+        pagination: {
+          page,
+          limit,
+          total: userIds.length,
+          totalPages: Math.ceil(userIds.length / limit),
+        },
+      };
+    } catch (error: any) {
+      // Si la tabla no existe, retornar lista vacía
+      return {
+        likes: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+  }
+
+  /**
+   * Crear comentario en un post
+   */
+  async createComment(
+    postId: string,
+    userId: string,
+    userRole: 'buyer' | 'model' | 'agency',
+    content: string,
+  ): Promise<PostCommentRecord> {
+    try {
+      // Verificar que el post existe
+      const post = await this.getPostById(postId);
+
+      if (post.status !== 'active') {
+        throw new BadRequestException('No puedes comentar en este post');
+      }
+
+      const now = Date.now();
+      const commentId = generateCommentId(postId, now);
+
+      const comment: PostCommentRecord = {
+        commentId,
+        postId,
+        createdAt: new Date().toISOString(),
+        userId,
+        userRole,
+        content,
+        status: 'active',
+        createdAtTimestamp: now,
+        updatedAtTimestamp: now,
+      };
+
+      // Enriquecer con información del autor
+      if (this.httpService) {
+        try {
+          const userResponse: any = await firstValueFrom(
+            this.httpService.get(`${this.userServiceUrl}/users/${userId}`)
+          );
+          const userData = userResponse.data?.data;
+          if (userData) {
+            comment.authorName = userData.fullName;
+            comment.authorAvatar = userData.avatarUrl || userData.profile?.avatarUrl;
+          }
+        } catch (error) {
+          // Continuar sin información del autor
+        }
+      }
+
+      // Guardar comentario
+      await this.dynamoClient.send(
+        new PutCommand({
+          TableName: this.commentsTable,
+          Item: comment,
+        }),
+      );
+
+      // Actualizar contador de comentarios en el post
+      const commentsCount = (post.commentsCount || 0) + 1;
+      await this.dynamoClient.send(
+        new UpdateCommand({
+          TableName: this.postsTable,
+          Key: { postId },
+          UpdateExpression: 'SET commentsCount = :count, updatedAtTimestamp = :updatedAt',
+          ExpressionAttributeValues: {
+            ':count': commentsCount,
+            ':updatedAt': now,
+          },
+        }),
+      );
+
+      this.logger.log('Comentario creado exitosamente', 'createComment', {
+        commentId,
+        postId,
+        userId,
+      });
+
+      return comment;
+    } catch (error: any) {
+      this.logger.error('Error al crear comentario', error?.stack, 'createComment', {
+        postId,
+        userId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener comentarios de un post
+   */
+  async getPostComments(postId: string, page: number = 1, limit: number = 20): Promise<{
+    comments: PostCommentRecord[];
+    pagination: any;
+  }> {
+    try {
+      const skip = (page - 1) * limit;
+
+      const response = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: this.commentsTable,
+          IndexName: 'postId-createdAt-index',
+          KeyConditionExpression: 'postId = :postId',
+          FilterExpression: '#status = :active',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
+          ExpressionAttributeValues: {
+            ':postId': postId,
+            ':active': 'active',
+          },
+          ScanIndexForward: false, // Más recientes primero
+        }),
+      );
+
+      if (!response.Items || response.Items.length === 0) {
+        return {
+          comments: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      const comments = (response.Items as PostCommentRecord[])
+        .slice(skip, skip + limit);
+
+      return {
+        comments,
+        pagination: {
+          page,
+          limit,
+          total: response.Items.length,
+          totalPages: Math.ceil(response.Items.length / limit),
+        },
+      };
+    } catch (error: any) {
+      // Si la tabla o índice no existe, retornar lista vacía
+      return {
+        comments: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+  }
+
+  /**
+   * Obtener packs comprados por el buyer
+   */
+  async getPurchasedPacks(buyerId: string, page: number = 1, limit: number = 20): Promise<{
+    packs: PackRecord[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    try {
+      const skip = (page - 1) * limit;
+
+      // Obtener pagos del buyer que sean compras de packs
+      if (!this.httpService) {
+        return {
+          packs: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      try {
+        const paymentsResponse: any = await firstValueFrom(
+          this.httpService.get(`${this.paymentServiceUrl}/payments/user/${buyerId}`)
+        );
+
+        const payments = paymentsResponse.data || [];
+        
+        // Filtrar pagos de packs
+        const packPayments = payments.filter((payment: any) => 
+          payment.metadata?.packId || payment.metadata?.type === 'pack_purchase'
+        );
+
+        if (packPayments.length === 0) {
+          return {
+            packs: [],
+            pagination: {
+              page,
+              limit,
+              total: 0,
+              totalPages: 0,
+            },
+          };
+        }
+
+        // Obtener packs desde DynamoDB
+        const packIds = packPayments
+          .map((payment: any) => payment.metadata?.packId)
+          .filter((id: string) => id);
+
+        const packs: PackRecord[] = [];
+        for (const packId of packIds) {
+          try {
+            const pack = await this.getPackById(packId);
+            if (pack && pack.status === 'active') {
+              packs.push(pack);
+            }
+          } catch (error) {
+            // Si el pack no existe, continuar
+            continue;
+          }
+        }
+
+        // Aplicar paginación
+        const total = packs.length;
+        const paginatedPacks = packs.slice(skip, skip + limit);
+
+        return {
+          packs: paginatedPacks,
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+          },
+        };
+      } catch (error) {
+        // Si hay error al obtener pagos, retornar lista vacía
+        return {
+          packs: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+    } catch (error: any) {
+      this.logger.error('Error al obtener packs comprados', error?.stack, 'getPurchasedPacks', {
+        buyerId,
+        error: error.message,
+      });
+      throw error;
+    }
   }
 }
 

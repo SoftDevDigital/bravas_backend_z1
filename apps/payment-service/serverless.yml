@@ -9,6 +9,9 @@ provider: ${file(../../serverless-common.yml):provider}
 provider:
   environment:
     SERVICE_NAME: payment-service
+    # Tablas DynamoDB
+    DYNAMODB_PAYMENTS_TABLE: ${env:DYNAMODB_PAYMENTS_TABLE, 'bravas-payments-dev'}
+    DYNAMODB_SUBSCRIPTIONS_TABLE: ${env:DYNAMODB_SUBSCRIPTIONS_TABLE, 'bravas-subscriptions-dev'}
     # Stripe
     STRIPE_SECRET_KEY_SECRET_NAME: ${env:STRIPE_SECRET_KEY_SECRET_NAME, 'bravas/stripe/secret-key'}
     STRIPE_WEBHOOK_SECRET_SECRET_NAME: ${env:STRIPE_WEBHOOK_SECRET_SECRET_NAME, 'bravas/stripe/webhook-secret'}

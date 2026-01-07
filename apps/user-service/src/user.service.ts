@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand, QueryCommand, ScanCommand, PutCommand, BatchGetCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand, QueryCommand, ScanCommand, PutCommand, BatchGetCommand, BatchWriteCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { AWSClientFactory, loadCredentials, UserRole, isAdminRole } from '@bravas/shared';
 import { CacheService } from './services/cache.service';
 
@@ -1622,6 +1622,576 @@ export class UserService {
     } catch (error) {
       // En caso de cualquier error, retornar 0
       return 0;
+    }
+  }
+
+  /**
+   * Seguir a un modelo
+   */
+  async followModel(userId: string, modelId: string) {
+    try {
+      // Verificar que el modelo existe y es un modelo
+      const modelResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: modelId },
+        }),
+      );
+
+      if (!modelResponse.Item) {
+        throw new NotFoundException('Modelo no encontrado');
+      }
+
+      if (modelResponse.Item.role !== 'MODEL' && modelResponse.Item.role !== 'model') {
+        throw new BadRequestException('El usuario especificado no es un modelo');
+      }
+
+      // Verificar que no se está siguiendo a sí mismo
+      if (userId === modelId) {
+        throw new BadRequestException('No puedes seguirte a ti mismo');
+      }
+
+      // Verificar si ya lo sigue
+      const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+      try {
+        const existingFollow = await this.dynamoClient.send(
+          new GetCommand({
+            TableName: followTable,
+            Key: {
+              userId,
+              modelId,
+            },
+          }),
+        );
+
+        if (existingFollow.Item) {
+          // Ya lo sigue, retornar éxito sin duplicar
+          return {
+            success: true,
+            message: 'Ya sigues a este modelo',
+            data: {
+              userId,
+              modelId,
+              followedAt: existingFollow.Item.createdAt,
+            },
+          };
+        }
+      } catch (error) {
+        // Si la tabla no existe, continuar creando
+      }
+
+      // Crear relación de follow
+      const followRecord = {
+        userId,
+        modelId,
+        createdAt: new Date().toISOString(),
+        createdAtTimestamp: Date.now(),
+      };
+
+      await this.dynamoClient.send(
+        new PutCommand({
+          TableName: followTable,
+          Item: followRecord,
+        }),
+      );
+
+      // Invalidar caché del feed del usuario
+      await this.cacheService.invalidatePattern(`feed:${userId}:*`);
+
+      return {
+        success: true,
+        message: 'Ahora sigues a este modelo',
+        data: {
+          userId,
+          modelId,
+          followedAt: followRecord.createdAt,
+        },
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al seguir modelo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Dejar de seguir a un modelo
+   */
+  async unfollowModel(userId: string, modelId: string) {
+    try {
+      const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+      
+      // Verificar que existe la relación
+      const existingFollow = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: followTable,
+          Key: {
+            userId,
+            modelId,
+          },
+        }),
+      );
+
+      if (!existingFollow.Item) {
+        throw new NotFoundException('No estás siguiendo a este modelo');
+      }
+
+      // Eliminar relación
+      await this.dynamoClient.send(
+        new DeleteCommand({
+          TableName: followTable,
+          Key: {
+            userId,
+            modelId,
+          },
+        }),
+      );
+
+      // Invalidar caché del feed del usuario
+      await this.cacheService.invalidatePattern(`feed:${userId}:*`);
+
+      return {
+        success: true,
+        message: 'Dejaste de seguir a este modelo',
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al dejar de seguir modelo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtener lista de modelos que sigue el usuario
+   */
+  async getFollowing(userId: string, page: number = 1, limit: number = 20) {
+    try {
+      const skip = (page - 1) * limit;
+      const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+
+      // Consultar follows del usuario
+      const response = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: followTable,
+          KeyConditionExpression: 'userId = :userId',
+          ExpressionAttributeValues: {
+            ':userId': userId,
+          },
+          ScanIndexForward: false, // Más recientes primero
+        }),
+      );
+
+      if (!response.Items || response.Items.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      // Obtener información de los modelos
+      const modelIds = response.Items.map((item) => item.modelId);
+      const models = await Promise.all(
+        modelIds.map(async (modelId) => {
+          try {
+            const userResponse = await this.dynamoClient.send(
+              new GetCommand({
+                TableName: this.credentials.dynamodb.usersTable,
+                Key: { id: modelId },
+              }),
+            );
+            const profileResponse = await this.dynamoClient.send(
+              new GetCommand({
+                TableName: this.credentials.dynamodb.userProfilesTable,
+                Key: { userId: modelId },
+              }),
+            );
+            return {
+              ...userResponse.Item,
+              profile: profileResponse.Item || {},
+            };
+          } catch (error) {
+            return null;
+          }
+        })
+      );
+
+      // Filtrar nulos y construir respuesta
+      const following = models
+        .filter((model): model is NonNullable<typeof model> => model !== null)
+        .slice(skip, skip + limit)
+        .map((model: any) => ({
+          userId: model.id || model.userId,
+          email: model.email,
+          fullName: model.fullName,
+          role: model.role,
+          verified: model.verified || false,
+          bio: model.profile?.bio,
+          avatarUrl: model.profile?.avatarUrl,
+          country: model.profile?.country,
+          reputation: model.profile?.reputation || 0,
+          createdAt: model.createdAt,
+        }));
+
+      return {
+        success: true,
+        data: following,
+        pagination: {
+          page,
+          limit,
+          total: modelIds.length,
+          totalPages: Math.ceil(modelIds.length / limit),
+        },
+      };
+    } catch (error: any) {
+      // Si la tabla no existe, retornar lista vacía
+      return {
+        success: true,
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+  }
+
+  /**
+   * Obtener lista de seguidores de un modelo
+   */
+  async getFollowers(modelId: string, page: number = 1, limit: number = 20) {
+    try {
+      // Verificar que es un modelo
+      const modelResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: modelId },
+        }),
+      );
+
+      if (!modelResponse.Item) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      if (modelResponse.Item.role !== 'MODEL' && modelResponse.Item.role !== 'model') {
+        throw new BadRequestException('El usuario no es un modelo');
+      }
+
+      const skip = (page - 1) * limit;
+      const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+
+      // Consultar seguidores del modelo (requiere GSI modelId-index)
+      const response = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: followTable,
+          IndexName: 'modelId-index',
+          KeyConditionExpression: 'modelId = :modelId',
+          ExpressionAttributeValues: {
+            ':modelId': modelId,
+          },
+          ScanIndexForward: false,
+        }),
+      );
+
+      if (!response.Items || response.Items.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      // Obtener información de los seguidores
+      const followerIds = response.Items.map((item) => item.userId);
+      const followers = await Promise.all(
+        followerIds.map(async (followerId) => {
+          try {
+            const userResponse = await this.dynamoClient.send(
+              new GetCommand({
+                TableName: this.credentials.dynamodb.usersTable,
+                Key: { id: followerId },
+              }),
+            );
+            const profileResponse = await this.dynamoClient.send(
+              new GetCommand({
+                TableName: this.credentials.dynamodb.userProfilesTable,
+                Key: { userId: followerId },
+              }),
+            );
+            return {
+              ...userResponse.Item,
+              profile: profileResponse.Item || {},
+            };
+          } catch (error) {
+            return null;
+          }
+        })
+      );
+
+      // Filtrar y construir respuesta
+      const followersList = followers
+        .filter((follower): follower is NonNullable<typeof follower> => follower !== null)
+        .slice(skip, skip + limit)
+        .map((follower: any) => ({
+          userId: follower.id || follower.userId,
+          email: follower.email,
+          fullName: follower.fullName,
+          avatarUrl: follower.profile?.avatarUrl,
+          createdAt: follower.createdAt,
+        }));
+
+      return {
+        success: true,
+        data: followersList,
+        pagination: {
+          page,
+          limit,
+          total: followerIds.length,
+          totalPages: Math.ceil(followerIds.length / limit),
+        },
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+      // Si la tabla o índice no existe, retornar lista vacía
+      return {
+        success: true,
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+  }
+
+  /**
+   * Obtener estadísticas del buyer
+   */
+  async getBuyerStats(buyerId: string) {
+    try {
+      // Obtener total gastado desde payment-service
+      let totalSpent = 0;
+      let packsPurchased = 0;
+      let activeSubscriptions = 0;
+      let totalTips = 0;
+
+      try {
+        // Calcular desde DynamoDB directamente
+        const paymentsTable = this.credentials.dynamodb.paymentsTable;
+        if (paymentsTable) {
+          const paymentsResponse = await this.dynamoClient.send(
+            new QueryCommand({
+              TableName: paymentsTable,
+              IndexName: 'userId-createdAt-index',
+              KeyConditionExpression: 'userId = :userId',
+              FilterExpression: '#status = :succeeded',
+              ExpressionAttributeNames: {
+                '#status': 'status',
+              },
+              ExpressionAttributeValues: {
+                ':userId': buyerId,
+                ':succeeded': 'succeeded',
+              },
+            }),
+          );
+
+          const payments = paymentsResponse.Items || [];
+          totalSpent = payments.reduce((sum, p: any) => sum + (p.amount || 0), 0);
+          packsPurchased = payments.filter((p: any) => 
+            p.metadata?.packId || p.metadata?.type === 'pack_purchase'
+          ).length;
+          totalTips = payments.filter((p: any) => p.type === 'tip').length;
+        }
+
+        // Obtener suscripciones activas
+        const subscriptionsTable = this.credentials.dynamodb.subscriptionsTable;
+        if (subscriptionsTable) {
+          const subscriptionsResponse = await this.dynamoClient.send(
+            new QueryCommand({
+              TableName: subscriptionsTable,
+              IndexName: 'userId-createdAt-index',
+              KeyConditionExpression: 'userId = :userId',
+              FilterExpression: '#status IN (:active, :trialing)',
+              ExpressionAttributeNames: {
+                '#status': 'status',
+              },
+              ExpressionAttributeValues: {
+                ':userId': buyerId,
+                ':active': 'active',
+                ':trialing': 'trialing',
+              },
+            }),
+          );
+          activeSubscriptions = subscriptionsResponse.Items?.length || 0;
+        }
+      } catch (error) {
+        // Si hay error, continuar con valores en 0
+      }
+
+      // Obtener modelos que sigue
+      let modelsFollowing = 0;
+      try {
+        const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+        const followResponse = await this.dynamoClient.send(
+          new QueryCommand({
+            TableName: followTable,
+            KeyConditionExpression: 'userId = :userId',
+            ExpressionAttributeValues: {
+              ':userId': buyerId,
+            },
+            Select: 'COUNT',
+          }),
+        );
+        modelsFollowing = followResponse.Count || 0;
+      } catch (error) {
+        // Si la tabla no existe, continuar con 0
+      }
+
+      return {
+        success: true,
+        data: {
+          totalSpent: totalSpent / 100, // Convertir de centavos a dólares
+          packsPurchased,
+          activeSubscriptions,
+          modelsFollowing,
+          totalTips,
+        },
+      };
+    } catch (error: any) {
+      throw new BadRequestException(`Error al obtener estadísticas: ${error.message}`);
+    }
+  }
+
+  /**
+   * Búsqueda global
+   */
+  async globalSearch(
+    query: string,
+    type: 'models' | 'packs' | 'users' | 'all' = 'all',
+    page: number = 1,
+    limit: number = 20,
+  ) {
+    try {
+      const skip = (page - 1) * limit;
+      const results: any = {
+        models: [],
+        packs: [],
+        users: [],
+      };
+
+      // Buscar modelos
+      if (type === 'all' || type === 'models') {
+        const modelsQuery = await this.listModels({
+          search: query,
+          page: 1,
+          limit: 100, // Obtener más para luego paginar
+        });
+        results.models = modelsQuery.data || [];
+      }
+
+      // Buscar packs (requiere llamar a content-service)
+      if (type === 'all' || type === 'packs') {
+        try {
+          const packsTable = this.credentials.dynamodb.packsTable;
+          if (packsTable) {
+            const packsResponse = await this.dynamoClient.send(
+              new ScanCommand({
+                TableName: packsTable,
+                FilterExpression: 'contains(#name, :query) OR contains(description, :query) AND #status = :active',
+                ExpressionAttributeNames: {
+                  '#name': 'name',
+                  '#status': 'status',
+                },
+                ExpressionAttributeValues: {
+                  ':query': query.toLowerCase(),
+                  ':active': 'active',
+                },
+              }),
+            );
+            results.packs = (packsResponse.Items || []).slice(0, limit);
+          }
+        } catch (error) {
+          // Si hay error, continuar sin packs
+        }
+      }
+
+      // Buscar usuarios (solo buyers y modelos públicos)
+      if (type === 'all' || type === 'users') {
+        const usersResponse = await this.dynamoClient.send(
+          new ScanCommand({
+            TableName: this.credentials.dynamodb.usersTable,
+            FilterExpression: 'contains(fullName, :query) OR contains(email, :query)',
+            ExpressionAttributeValues: {
+              ':query': query,
+            },
+            Limit: limit,
+          }),
+        );
+        results.users = (usersResponse.Items || []).map((user: any) => ({
+          userId: user.id || user.userId,
+          fullName: user.fullName,
+          email: user.email,
+          role: user.role,
+          avatarUrl: user.avatarUrl,
+        }));
+      }
+
+      // Aplicar paginación a cada tipo
+      if (type === 'all') {
+        // Combinar y ordenar por relevancia (simplificado)
+        const allResults = [
+          ...results.models.map((m: any) => ({ ...m, resultType: 'model' })),
+          ...results.packs.map((p: any) => ({ ...p, resultType: 'pack' })),
+          ...results.users.map((u: any) => ({ ...u, resultType: 'user' })),
+        ];
+        const paginated = allResults.slice(skip, skip + limit);
+
+        return {
+          success: true,
+          data: paginated,
+          pagination: {
+            page,
+            limit,
+            total: allResults.length,
+            totalPages: Math.ceil(allResults.length / limit),
+          },
+        };
+      } else {
+        // Retornar solo el tipo solicitado
+        const typeResults = results[type] || [];
+        const paginated = typeResults.slice(skip, skip + limit);
+
+        return {
+          success: true,
+          data: paginated,
+          pagination: {
+            page,
+            limit,
+            total: typeResults.length,
+            totalPages: Math.ceil(typeResults.length / limit),
+          },
+        };
+      }
+    } catch (error: any) {
+      throw new BadRequestException(`Error en búsqueda: ${error.message}`);
     }
   }
 

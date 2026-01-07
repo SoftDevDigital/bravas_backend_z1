@@ -107,4 +107,57 @@ export function generatePackId(modelId: string, timestamp?: number): string {
   return `pack_${modelId}_${ts}`;
 }
 
+/**
+ * Esquema para likes de posts
+ */
+export interface PostLikeRecord {
+  // Partition Key
+  postId: string;
+  
+  // Sort Key
+  userId: string; // ID del usuario que dio like
+  
+  // Metadatos
+  createdAt: string; // ISO timestamp
+  createdAtTimestamp: number; // Unix timestamp
+}
+
+/**
+ * Esquema para comentarios de posts
+ */
+export interface PostCommentRecord {
+  // Partition Key
+  commentId: string; // PK: comment_{postId}_{timestamp}
+  
+  // Sort Key (para GSI)
+  postId: string;
+  createdAt: string; // ISO timestamp
+  
+  // Autor
+  userId: string; // ID del usuario que comentó
+  userRole: 'buyer' | 'model' | 'agency';
+  
+  // Información enriquecida del autor
+  authorName?: string;
+  authorAvatar?: string;
+  
+  // Contenido
+  content: string; // Texto del comentario
+  
+  // Estado
+  status: 'active' | 'deleted' | 'hidden';
+  
+  // Auditoría
+  createdAtTimestamp: number;
+  updatedAtTimestamp: number;
+}
+
+/**
+ * Helper para generar commentId
+ */
+export function generateCommentId(postId: string, timestamp?: number): string {
+  const ts = timestamp || Date.now();
+  return `comment_${postId}_${ts}`;
+}
+
 

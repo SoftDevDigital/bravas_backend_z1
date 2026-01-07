@@ -9,9 +9,10 @@ provider: ${file(../../serverless-common.yml):provider}
 provider:
   environment:
     SERVICE_NAME: user-service
-    DYNAMODB_USERS_TABLE: ${env:DYNAMODB_USERS_TABLE}
-    DYNAMODB_USER_PROFILES_TABLE: ${env:DYNAMODB_USER_PROFILES_TABLE}
-    S3_AVATARS_BUCKET: ${env:S3_AVATARS_BUCKET}
+    DYNAMODB_USERS_TABLE: ${env:DYNAMODB_USERS_TABLE, 'bravas-users-dev'}
+    DYNAMODB_USER_PROFILES_TABLE: ${env:DYNAMODB_USER_PROFILES_TABLE, 'bravas-user-profiles-dev'}
+    DYNAMODB_USER_FOLLOWS_TABLE: ${env:DYNAMODB_USER_FOLLOWS_TABLE, 'bravas-user-follows-dev'}
+    S3_AVATARS_BUCKET: ${env:S3_AVATARS_BUCKET, 'bravas-avatars-dev'}
 
 # Funciones Lambda
 functions:

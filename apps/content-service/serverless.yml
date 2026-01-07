@@ -15,6 +15,12 @@ provider:
     # URLs de otros servicios
     USER_SERVICE_URL: http://localhost:3001/api/v1
     PAYMENT_SERVICE_URL: http://localhost:3002/api/v1
+    # Tablas DynamoDB
+    DYNAMODB_POSTS_TABLE: ${env:DYNAMODB_POSTS_TABLE, 'bravas-posts-dev'}
+    DYNAMODB_PACKS_TABLE: ${env:DYNAMODB_PACKS_TABLE, 'bravas-packs-dev'}
+    DYNAMODB_POST_LIKES_TABLE: ${env:DYNAMODB_POST_LIKES_TABLE, 'bravas-post-likes-dev'}
+    DYNAMODB_POST_COMMENTS_TABLE: ${env:DYNAMODB_POST_COMMENTS_TABLE, 'bravas-post-comments-dev'}
+    DYNAMODB_USER_FOLLOWS_TABLE: ${env:DYNAMODB_USER_FOLLOWS_TABLE, 'bravas-user-follows-dev'}
   iam:
     role:
       statements:
@@ -27,10 +33,16 @@ provider:
             - dynamodb:Scan
             - dynamodb:DeleteItem
           Resource:
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-posts"
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-packs"
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-posts/index/*"
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment}-packs/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-posts-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-packs-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-post-likes-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-post-comments-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-user-follows-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-posts-${self:provider.stage}/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-packs-${self:provider.stage}/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-post-likes-${self:provider.stage}/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-post-comments-${self:provider.stage}/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/bravas-user-follows-${self:provider.stage}/index/*"
         - Effect: "Allow"
           Action:
             - s3:GetObject

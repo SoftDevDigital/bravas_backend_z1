@@ -168,6 +168,204 @@ export class PaymentController {
     return this.paymentService.getUserPayments(userId);
   }
 
+  /**
+   * GET /payments/me/movements
+   * Obtener historial de movimientos del buyer autenticado
+   */
+  @Get('me/movements')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '💰 Historial de movimientos',
+    description: `
+**¿Para qué sirve?**
+Obtiene el historial completo de transacciones del usuario autenticado (buyer).
+
+**Casos de uso:**
+- Ver todas las compras realizadas
+- Ver suscripciones activas y canceladas
+- Ver tips enviados
+- Filtrar por tipo de transacción
+- Ver historial de gastos
+
+**Filtros disponibles:**
+- \`type\`: Filtrar por tipo (purchases, subscriptions, tips, all)
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20)
+
+**Tipos de transacciones:**
+- \`purchases\`: Compras de packs, PPV
+- \`subscriptions\`: Suscripciones a modelos
+- \`tips\`: Tips enviados
+- \`all\`: Todas las transacciones
+
+**Ejemplo de uso:**
+\`\`\`
+GET /payments/me/movements?type=purchases&page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+    `.trim(),
+  })
+  @ApiQuery({
+    name: 'type',
+    required: false,
+    enum: ['purchases', 'subscriptions', 'tips', 'all'],
+    description: 'Tipo de transacción a filtrar',
+    example: 'all',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    description: 'Número de página (default: 1)',
+    example: 1,
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Resultados por página (default: 20)',
+    example: 20,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Historial de movimientos obtenido exitosamente',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  async getMyMovements(
+    @Request() req: any,
+    @Query('type') type?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const startTime = Date.now();
+    try {
+      // Obtener userId del token
+      const { getUserFromToken } = await import('../helpers/auth.helper');
+      const userInfo = await getUserFromToken(req.token);
+      
+      const pageNum = page ? parseInt(page, 10) : 1;
+      const limitNum = limit ? parseInt(limit, 10) : 20;
+      const filterType = type || 'all';
+
+      const result = await this.paymentService.getUserMovements(
+        userInfo.userId,
+        filterType,
+        pageNum,
+        limitNum,
+      );
+
+      const duration = Date.now() - startTime;
+      this.logger.log('Movimientos obtenidos exitosamente', 'getMyMovements', {
+        userId: userInfo.userId,
+        type: filterType,
+        count: result.data?.length || 0,
+        duration: `${duration}ms`,
+      });
+
+      return result;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      this.logger.error('Error al obtener movimientos', error?.stack, 'getMyMovements', {
+        error: error.message,
+        duration: `${duration}ms`,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * GET /payments/me/subscriptions
+   * Listar suscripciones activas del buyer
+   */
+  @Get('me/subscriptions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '📅 Mis suscripciones activas',
+    description: 'Retorna todas las suscripciones activas del usuario autenticado.',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['active', 'canceled', 'all'],
+    description: 'Filtrar por estado de suscripción',
+    example: 'active',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Suscripciones obtenidas exitosamente',
+  })
+  async getMySubscriptions(
+    @Request() req: any,
+    @Query('status') status?: string,
+  ) {
+    try {
+      const { getUserFromToken } = await import('../helpers/auth.helper');
+      const userInfo = await getUserFromToken(req.token);
+      
+      const result = await this.subscriptionService.getUserSubscriptions(
+        userInfo.userId,
+        status || 'active',
+      );
+
+      return result;
+    } catch (error: any) {
+      this.logger.error('Error al obtener suscripciones', error?.stack, 'getMySubscriptions', {
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * PUT /payments/subscriptions/:subscriptionId/cancel
+   * Cancelar suscripción
+   */
+  @Put('subscriptions/:subscriptionId/cancel')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '❌ Cancelar suscripción',
+    description: 'Cancela una suscripción activa. La suscripción seguirá activa hasta el final del período pagado.',
+  })
+  @ApiParam({
+    name: 'subscriptionId',
+    description: 'ID de la suscripción a cancelar',
+    example: 'sub_123',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Suscripción cancelada exitosamente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Suscripción no encontrada',
+  })
+  async cancelSubscription(
+    @Request() req: any,
+    @Param('subscriptionId') subscriptionId: string,
+  ) {
+    try {
+      const { getUserFromToken } = await import('../helpers/auth.helper');
+      const userInfo = await getUserFromToken(req.token);
+      
+      const result = await this.subscriptionService.cancelSubscription(
+        subscriptionId,
+        userInfo.userId,
+        false, // cancelAtPeriodEnd
+      );
+
+      return result;
+    } catch (error: any) {
+      this.logger.error('Error al cancelar suscripción', error?.stack, 'cancelSubscription', {
+        subscriptionId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
   @Get('creator/:recipientId/balance')
   @ApiOperation({ summary: 'Obtener balance disponible para retiro' })
   @ApiResponse({ status: 200, description: 'Balance disponible' })

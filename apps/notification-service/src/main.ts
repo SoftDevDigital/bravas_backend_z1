@@ -79,6 +79,7 @@ Authorization: Bearer {jwt_token}
       version: '1.0.0',
       path: '/api-docs',
       environment: (process.env.ENVIRONMENT as 'dev' | 'prod') || 'dev',
+      apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3006}`,
     },
   });
 
