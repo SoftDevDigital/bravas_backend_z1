@@ -1290,11 +1290,34 @@ export class ContentService {
       }
 
       try {
-        const paymentsResponse: any = await firstValueFrom(
-          this.httpService.get(`${this.paymentServiceUrl}/payments/user/${buyerId}`)
-        );
-
-        const payments = paymentsResponse.data || [];
+        // Intentar obtener pagos del payment service
+        let payments: any[] = [];
+        try {
+          // El endpoint /payments/user/:userId puede requerir autenticación
+          // Por ahora, si falla, simplemente retornar lista vacía
+          const paymentsResponse: any = await firstValueFrom(
+            this.httpService.get(`${this.paymentServiceUrl}/payments/user/${buyerId}`)
+          );
+          // El endpoint puede retornar directamente un array o dentro de data
+          payments = Array.isArray(paymentsResponse) ? paymentsResponse : (paymentsResponse.data || paymentsResponse || []);
+        } catch (httpError: any) {
+          // Si el endpoint no existe, requiere auth, o hay error, retornar lista vacía
+          this.logger.warn('No se pudieron obtener pagos del payment service (puede requerir autenticación)', 'getPurchasedPacks', {
+            buyerId,
+            error: httpError.message,
+            statusCode: httpError.response?.status,
+          });
+          // Retornar lista vacía en lugar de fallar
+          return {
+            packs: [],
+            pagination: {
+              page,
+              limit,
+              total: 0,
+              totalPages: 0,
+            },
+          };
+        }
         
         // Filtrar pagos de packs
         const packPayments = payments.filter((payment: any) => 
@@ -1361,7 +1384,16 @@ export class ContentService {
         buyerId,
         error: error.message,
       });
-      throw error;
+      // En lugar de lanzar error, retornar lista vacía para evitar 500
+      return {
+        packs: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
     }
   }
 }

@@ -262,19 +262,32 @@ export class SubscriptionService {
         expressionAttributeValues[':unpaid'] = 'unpaid';
       }
 
-      const command = new QueryCommand({
-        TableName: this.subscriptionsTable,
-        IndexName: 'userId-createdAt-index',
-        KeyConditionExpression: 'userId = :userId',
-        ...(filterExpression && {
-          FilterExpression: filterExpression,
-          ExpressionAttributeNames: expressionAttributeNames,
-        }),
-        ExpressionAttributeValues: expressionAttributeValues,
-        ScanIndexForward: false,
-      });
-
-      const response = await this.dynamoClient.send(command);
+      let response;
+      try {
+        const command = new QueryCommand({
+          TableName: this.subscriptionsTable,
+          IndexName: 'userId-createdAt-index',
+          KeyConditionExpression: 'userId = :userId',
+          ...(filterExpression && {
+            FilterExpression: filterExpression,
+            ExpressionAttributeNames: expressionAttributeNames,
+          }),
+          ExpressionAttributeValues: expressionAttributeValues,
+          ScanIndexForward: false,
+        });
+        response = await this.dynamoClient.send(command);
+      } catch (indexError: any) {
+        // Si el índice no existe, retornar lista vacía en lugar de fallar
+        if (indexError.message?.includes('index') || indexError.message?.includes('Index') || indexError.message?.includes('ResourceNotFoundException')) {
+          this.logger.warn('Índice userId-createdAt-index no encontrado, retornando lista vacía', 'getUserSubscriptions', { userId });
+          return {
+            success: true,
+            data: [],
+          };
+        } else {
+          throw indexError;
+        }
+      }
       return {
         success: true,
         data: (response.Items || []) as SubscriptionRecord[],

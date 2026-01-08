@@ -2,8 +2,10 @@ import {
   Controller,
   Post,
   Get,
+  Put,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   HttpCode,
@@ -14,6 +16,8 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiQuery,
+  ApiParam,
 } from '@nestjs/swagger';
 import { AuthGuard } from '@bravas/shared';
 import { PaymentService } from '../services/payment.service';
@@ -24,6 +28,7 @@ import { ConfigService } from '@nestjs/config';
 import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { CreatePayoutDto } from '../dto/create-payout.dto';
+import { getUserFromToken } from '../helpers/auth.helper';
 
 @ApiTags('payments')
 @Controller('payments')
@@ -243,12 +248,13 @@ Authorization: Bearer {token}
     const startTime = Date.now();
     try {
       // Obtener userId del token
-      const { getUserFromToken } = await import('../helpers/auth.helper');
       const userInfo = await getUserFromToken(req.token);
       
-      const pageNum = page ? parseInt(page, 10) : 1;
-      const limitNum = limit ? parseInt(limit, 10) : 20;
-      const filterType = type || 'all';
+      const pageNum = page ? Number.parseInt(page, 10) : 1;
+      const limitNum = limit ? Number.parseInt(limit, 10) : 20;
+      const filterType = (type && ['all', 'purchases', 'subscriptions', 'tips'].includes(type)) 
+        ? (type as 'all' | 'purchases' | 'subscriptions' | 'tips')
+        : 'all';
 
       const result = await this.paymentService.getUserMovements(
         userInfo.userId,
@@ -265,7 +271,19 @@ Authorization: Bearer {token}
         duration: `${duration}ms`,
       });
 
-      return result;
+      // Asegurar formato de respuesta consistente
+      return {
+        success: true,
+        data: {
+          items: result.data || [],
+          pagination: result.pagination || {
+            page: pageNum,
+            limit: limitNum,
+            total: result.data?.length || 0,
+            totalPages: Math.ceil((result.data?.length || 0) / limitNum),
+          },
+        },
+      };
     } catch (error: any) {
       const duration = Date.now() - startTime;
       this.logger.error('Error al obtener movimientos', error?.stack, 'getMyMovements', {
@@ -302,12 +320,15 @@ Authorization: Bearer {token}
     @Query('status') status?: string,
   ) {
     try {
-      const { getUserFromToken } = await import('../helpers/auth.helper');
       const userInfo = await getUserFromToken(req.token);
+      
+      const filterStatus = (status && ['active', 'canceled', 'all'].includes(status))
+        ? (status as 'active' | 'canceled' | 'all')
+        : 'active';
       
       const result = await this.subscriptionService.getUserSubscriptions(
         userInfo.userId,
-        status || 'active',
+        filterStatus,
       );
 
       return result;
@@ -347,7 +368,6 @@ Authorization: Bearer {token}
     @Param('subscriptionId') subscriptionId: string,
   ) {
     try {
-      const { getUserFromToken } = await import('../helpers/auth.helper');
       const userInfo = await getUserFromToken(req.token);
       
       const result = await this.subscriptionService.cancelSubscription(

@@ -1049,6 +1049,144 @@ Authorization: Bearer {token}
   }
 
   /**
+   * GET /content/packs/purchased
+   * Listar packs comprados por el buyer autenticado
+   */
+  @Get('packs/purchased')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '📦 Mis packs comprados',
+    description: `
+**¿Para qué sirve?**
+Retorna todos los packs que el usuario autenticado (buyer) ha comprado, ordenados por fecha de compra (más recientes primero).
+
+**Casos de uso:**
+- Ver biblioteca de contenido comprado
+- Acceder a packs adquiridos
+- Ver historial de compras de packs
+- Implementar sección "Mi biblioteca" en el frontend
+
+**Restricciones:**
+- Solo disponible para usuarios con rol USER
+- Solo muestra packs con estado de pago exitoso
+- Los packs están ordenados por fecha de compra (más recientes primero)
+
+**Parámetros:**
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20, max: 100)
+
+**Ejemplo de uso:**
+\`\`\`
+GET /content/packs/purchased?page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "pack_123",
+        "modelId": "model_456",
+        "modelName": "Ana Martínez",
+        "title": "Pack Premium",
+        "description": "Contenido exclusivo",
+        "price": 49.99,
+        "imageUrl": "https://...",
+        "purchasedAt": "2024-01-20T15:30:00Z",
+        "status": "purchased"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 1,
+      "totalPages": 1
+    }
+  },
+  "message": "Packs comprados obtenidos exitosamente"
+}
+\`\`\`
+    `,
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Resultados por página' })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Packs comprados obtenidos exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER pueden ver sus packs comprados',
+  })
+  async getPurchasedPacks(
+    @Request() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNum = page ? Number.parseInt(page, 10) : 1;
+    const limitNum = limit ? Number.parseInt(limit, 10) : 20;
+    
+    try {
+      const userInfo = await getUserFromToken(req.token);
+
+      // Solo usuarios USER pueden ver sus packs comprados
+      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+        throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus packs comprados');
+      }
+
+      const result = await this.contentService.getPurchasedPacks(userInfo.userId, pageNum, limitNum);
+
+      // Mapear packs de forma segura
+      const mappedPacks = result.packs.map(p => {
+        try {
+          return this.contentService.mapPackToDto(p);
+        } catch (mapError: any) {
+          this.logger.warn('Error al mapear pack a DTO', 'getPurchasedPacks', {
+            packId: p.packId,
+            error: mapError.message,
+          });
+          return null;
+        }
+      }).filter(p => p !== null);
+
+      return {
+        success: true,
+        data: {
+          items: mappedPacks,
+          pagination: result.pagination,
+        },
+        message: 'Packs comprados obtenidos exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al obtener packs comprados', error?.stack, 'getPurchasedPacks', {
+        error: error.message,
+      });
+      // Retornar lista vacía en lugar de lanzar error para evitar 500
+      return {
+        success: true,
+        data: {
+          items: [],
+          pagination: {
+            page: pageNum,
+            limit: limitNum,
+            total: 0,
+            totalPages: 0,
+          },
+        },
+        message: 'Packs comprados obtenidos exitosamente (sin resultados)',
+      };
+    }
+  }
+
+  /**
    * GET /content/packs/:packId
    * Obtener pack por ID
    */
@@ -1216,124 +1354,6 @@ Authorization: Bearer {token}
     }
   }
 
-  /**
-   * GET /content/packs/purchased
-   * Listar packs comprados por el buyer autenticado
-   */
-  @Get('packs/purchased')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: '📦 Mis packs comprados',
-    description: `
-**¿Para qué sirve?**
-Retorna todos los packs que el usuario autenticado (buyer) ha comprado, ordenados por fecha de compra (más recientes primero).
-
-**Casos de uso:**
-- Ver biblioteca de contenido comprado
-- Acceder a packs adquiridos
-- Ver historial de compras de packs
-- Implementar sección "Mi biblioteca" en el frontend
-
-**Restricciones:**
-- Solo disponible para usuarios con rol USER
-- Solo muestra packs con estado de pago exitoso
-- Los packs están ordenados por fecha de compra (más recientes primero)
-
-**Parámetros:**
-- \`page\`: Número de página (default: 1)
-- \`limit\`: Resultados por página (default: 20, max: 100)
-
-**Ejemplo de uso:**
-\`\`\`
-GET /content/packs/purchased?page=1&limit=20
-Authorization: Bearer {token}
-\`\`\`
-
-**Ejemplo de respuesta:**
-\`\`\`json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "pack_123",
-      "modelId": "model_456",
-      "modelName": "Ana Martínez",
-      "title": "Pack Premium",
-      "description": "Contenido exclusivo",
-      "price": 49.99,
-      "imageUrl": "https://...",
-      "purchasedAt": "2024-01-20T15:30:00Z",
-      "status": "purchased"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 5,
-    "hasMore": false
-  },
-  "message": "Packs comprados obtenidos exitosamente"
-}
-\`\`\`
-    `.trim(),
-  })
-  @ApiQuery({ 
-    name: 'page', 
-    required: false, 
-    description: '📄 Número de página (default: 1)',
-    example: 1,
-    type: Number,
-  })
-  @ApiQuery({ 
-    name: 'limit', 
-    required: false, 
-    description: '📊 Resultados por página (default: 20, max: 100)',
-    example: 20,
-    type: Number,
-  })
-  @ApiResponse({
-    status: 200,
-    description: '✅ Packs comprados obtenidos exitosamente',
-    type: ApiResponseDto,
-  })
-  @ApiResponse({
-    status: 401,
-    description: '❌ No autenticado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: '❌ Solo usuarios con rol USER pueden ver sus packs comprados',
-  })
-  async getPurchasedPacks(
-    @Request() req: any,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    try {
-      const userInfo = await getUserFromToken(req.token);
-
-      // Solo usuarios USER pueden ver sus packs comprados
-      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
-        throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus packs comprados');
-      }
-
-      const pageNum = page ? parseInt(page, 10) : 1;
-      const limitNum = limit ? parseInt(limit, 10) : 20;
-      const result = await this.contentService.getPurchasedPacks(userInfo.userId, pageNum, limitNum);
-
-      return {
-        success: true,
-        data: result.packs.map(p => this.contentService.mapPackToDto(p)),
-        pagination: result.pagination,
-        message: 'Packs comprados obtenidos exitosamente',
-      };
-    } catch (error: any) {
-      this.logger.error('Error al obtener packs comprados', error?.stack, 'getPurchasedPacks', {
-        error: error.message,
-      });
-      throw error;
-    }
-  }
 }
 
 

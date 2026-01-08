@@ -30,6 +30,10 @@ export interface Credentials {
         userModelRelationsTable: string;
         modelAgencyRelationsTable: string;
         agencyAgencyRelationsTable: string;
+        // Nuevas tablas para sistema de Follow/Likes/Comments
+        userFollowsTable?: string;
+        postLikesTable?: string;
+        postCommentsTable?: string;
     };
     s3: {
         avatarsBucket: string;

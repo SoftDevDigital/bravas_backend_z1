@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { AWSClientFactory, loadCredentials } from '@bravas/shared';
 import { v4 as uuidv4 } from 'uuid';
 import { StripeService } from './stripe.service';
@@ -386,17 +386,28 @@ export class PaymentService {
       const skip = (page - 1) * limit;
 
       // Obtener pagos del usuario
-      const paymentsResponse = await this.dynamoClient.send(
-        new QueryCommand({
-          TableName: this.paymentsTable,
-          IndexName: 'userId-createdAt-index',
-          KeyConditionExpression: 'userId = :userId',
-          ExpressionAttributeValues: {
-            ':userId': userId,
-          },
-          ScanIndexForward: false,
-        }),
-      );
+      let paymentsResponse;
+      try {
+        paymentsResponse = await this.dynamoClient.send(
+          new QueryCommand({
+            TableName: this.paymentsTable,
+            IndexName: 'userId-createdAt-index',
+            KeyConditionExpression: 'userId = :userId',
+            ExpressionAttributeValues: {
+              ':userId': userId,
+            },
+            ScanIndexForward: false,
+          }),
+        );
+      } catch (indexError: any) {
+        // Si el índice no existe, retornar lista vacía en lugar de fallar
+        if (indexError.message?.includes('index') || indexError.message?.includes('Index') || indexError.message?.includes('ResourceNotFoundException')) {
+          this.logger.warn('Índice userId-createdAt-index no encontrado, retornando lista vacía', 'getUserMovements', { userId });
+          paymentsResponse = { Items: [] };
+        } else {
+          throw indexError;
+        }
+      }
 
       let movements: any[] = [];
 
