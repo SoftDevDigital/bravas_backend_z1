@@ -1626,28 +1626,64 @@ export class UserService {
   }
 
   /**
-   * Seguir a un modelo
+   * Seguir a un usuario (puede ser MODEL, USER o AGENCY según reglas de negocio)
+   * 
+   * REGLAS DE NEGOCIO:
+   * - MODEL puede seguir a MODEL, USER y AGENCY
+   * - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
+   * - AGENCY no puede seguir (si se implementa en el futuro)
    */
-  async followModel(userId: string, modelId: string) {
+  async followModel(userId: string, followedUserId: string, followerRole: string) {
     try {
-      // Verificar que el modelo existe y es un modelo
-      const modelResponse = await this.dynamoClient.send(
+      // Obtener información del usuario que va a seguir
+      const followerResponse = await this.dynamoClient.send(
         new GetCommand({
           TableName: this.credentials.dynamodb.usersTable,
-          Key: { id: modelId },
+          Key: { id: userId },
         }),
       );
 
-      if (!modelResponse.Item) {
-        throw new NotFoundException('Modelo no encontrado');
+      if (!followerResponse.Item) {
+        throw new NotFoundException('Usuario que intenta seguir no encontrado');
       }
 
-      if (modelResponse.Item.role !== 'MODEL' && modelResponse.Item.role !== 'model') {
-        throw new BadRequestException('El usuario especificado no es un modelo');
+      const actualFollowerRole = followerResponse.Item.role?.toLowerCase() || followerRole?.toLowerCase();
+
+      // Verificar que el usuario a seguir existe
+      const followedResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: followedUserId },
+        }),
+      );
+
+      if (!followedResponse.Item) {
+        throw new NotFoundException('Usuario a seguir no encontrado');
+      }
+
+      const followedRole = followedResponse.Item.role?.toLowerCase();
+
+      // Validar reglas de negocio según el rol del seguidor
+      if (actualFollowerRole === 'user') {
+        // USER puede seguir a USER y MODEL, pero NO a AGENCY
+        if (followedRole === 'agency') {
+          throw new ForbiddenException('Los usuarios (USER) no pueden seguir agencias');
+        }
+        if (followedRole !== 'user' && followedRole !== 'model') {
+          throw new BadRequestException(`No puedes seguir a un usuario con rol ${followedRole}`);
+        }
+      } else if (actualFollowerRole === 'model') {
+        // MODEL puede seguir a MODEL, USER y AGENCY
+        if (followedRole !== 'user' && followedRole !== 'model' && followedRole !== 'agency') {
+          throw new BadRequestException(`No puedes seguir a un usuario con rol ${followedRole}`);
+        }
+      } else {
+        // Otros roles no pueden seguir (por ahora)
+        throw new ForbiddenException(`El rol ${actualFollowerRole} no puede seguir usuarios`);
       }
 
       // Verificar que no se está siguiendo a sí mismo
-      if (userId === modelId) {
+      if (userId === followedUserId) {
         throw new BadRequestException('No puedes seguirte a ti mismo');
       }
 
@@ -1659,7 +1695,7 @@ export class UserService {
             TableName: followTable,
             Key: {
               userId,
-              modelId,
+              modelId: followedUserId, // Mantenemos modelId para compatibilidad con estructura existente
             },
           }),
         );
@@ -1668,10 +1704,11 @@ export class UserService {
           // Ya lo sigue, retornar éxito sin duplicar
           return {
             success: true,
-            message: 'Ya sigues a este modelo',
+            message: 'Ya sigues a este usuario',
             data: {
               userId,
-              modelId,
+              followedUserId,
+              followedRole,
               followedAt: existingFollow.Item.createdAt,
             },
           };
@@ -1683,7 +1720,8 @@ export class UserService {
       // Crear relación de follow
       const followRecord = {
         userId,
-        modelId,
+        modelId: followedUserId, // Mantenemos modelId para compatibilidad con estructura existente
+        followedRole, // Guardamos el rol para consultas futuras
         createdAt: new Date().toISOString(),
         createdAtTimestamp: Date.now(),
       };
@@ -1700,25 +1738,26 @@ export class UserService {
 
       return {
         success: true,
-        message: 'Ahora sigues a este modelo',
+        message: `Ahora sigues a este ${followedRole === 'model' ? 'modelo' : followedRole === 'user' ? 'usuario' : 'agencia'}`,
         data: {
           userId,
-          modelId,
+          followedUserId,
+          followedRole,
           followedAt: followRecord.createdAt,
         },
       };
     } catch (error: any) {
-      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof ForbiddenException) {
         throw error;
       }
-      throw new BadRequestException(`Error al seguir modelo: ${error.message}`);
+      throw new BadRequestException(`Error al seguir usuario: ${error.message}`);
     }
   }
 
   /**
-   * Dejar de seguir a un modelo
+   * Dejar de seguir a un usuario (puede ser MODEL, USER o AGENCY)
    */
-  async unfollowModel(userId: string, modelId: string) {
+  async unfollowModel(userId: string, followedUserId: string) {
     try {
       const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
       
@@ -1728,13 +1767,34 @@ export class UserService {
           TableName: followTable,
           Key: {
             userId,
-            modelId,
+            modelId: followedUserId, // Mantenemos modelId para compatibilidad
           },
         }),
       );
 
       if (!existingFollow.Item) {
-        throw new NotFoundException('No estás siguiendo a este modelo');
+        throw new NotFoundException('No estás siguiendo a este usuario');
+      }
+
+      // Obtener el rol del usuario seguido para el mensaje
+      let followedRole = 'usuario';
+      try {
+        const followedResponse = await this.dynamoClient.send(
+          new GetCommand({
+            TableName: this.credentials.dynamodb.usersTable,
+            Key: { id: followedUserId },
+          }),
+        );
+        if (followedResponse.Item) {
+          const role = followedResponse.Item.role?.toLowerCase();
+          if (role === 'model' || role === 'MODEL') {
+            followedRole = 'modelo';
+          } else if (role === 'agency' || role === 'AGENCY') {
+            followedRole = 'agencia';
+          }
+        }
+      } catch (error) {
+        // Si no se puede obtener, usar genérico
       }
 
       // Eliminar relación
@@ -1743,7 +1803,7 @@ export class UserService {
           TableName: followTable,
           Key: {
             userId,
-            modelId,
+            modelId: followedUserId, // Mantenemos modelId para compatibilidad
           },
         }),
       );
@@ -1753,18 +1813,18 @@ export class UserService {
 
       return {
         success: true,
-        message: 'Dejaste de seguir a este modelo',
+        message: `Dejaste de seguir a este ${followedRole}`,
       };
     } catch (error: any) {
       if (error instanceof NotFoundException) {
         throw error;
       }
-      throw new BadRequestException(`Error al dejar de seguir modelo: ${error.message}`);
+      throw new BadRequestException(`Error al dejar de seguir usuario: ${error.message}`);
     }
   }
 
   /**
-   * Obtener lista de modelos que sigue el usuario
+   * Obtener lista de usuarios que sigue (pueden ser MODEL, USER o AGENCY)
    */
   async getFollowing(userId: string, page: number = 1, limit: number = 20) {
     try {
@@ -1796,21 +1856,21 @@ export class UserService {
         };
       }
 
-      // Obtener información de los modelos
-      const modelIds = response.Items.map((item) => item.modelId);
-      const models = await Promise.all(
-        modelIds.map(async (modelId) => {
+      // Obtener información de los usuarios seguidos (pueden ser MODEL, USER o AGENCY)
+      const followedUserIds = response.Items.map((item) => item.modelId); // modelId contiene el ID del usuario seguido
+      const followedUsers = await Promise.all(
+        followedUserIds.map(async (followedUserId) => {
           try {
             const userResponse = await this.dynamoClient.send(
               new GetCommand({
                 TableName: this.credentials.dynamodb.usersTable,
-                Key: { id: modelId },
+                Key: { id: followedUserId },
               }),
             );
             const profileResponse = await this.dynamoClient.send(
               new GetCommand({
                 TableName: this.credentials.dynamodb.userProfilesTable,
-                Key: { userId: modelId },
+                Key: { userId: followedUserId },
               }),
             );
             return {
@@ -1824,20 +1884,20 @@ export class UserService {
       );
 
       // Filtrar nulos y construir respuesta
-      const following = models
-        .filter((model): model is NonNullable<typeof model> => model !== null)
+      const following = followedUsers
+        .filter((user): user is NonNullable<typeof user> => user !== null)
         .slice(skip, skip + limit)
-        .map((model: any) => ({
-          userId: model.id || model.userId,
-          email: model.email,
-          fullName: model.fullName,
-          role: model.role,
-          verified: model.verified || false,
-          bio: model.profile?.bio,
-          avatarUrl: model.profile?.avatarUrl,
-          country: model.profile?.country,
-          reputation: model.profile?.reputation || 0,
-          createdAt: model.createdAt,
+        .map((user: any) => ({
+          userId: user.id || user.userId,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          verified: user.verified || false,
+          bio: user.profile?.bio,
+          avatarUrl: user.profile?.avatarUrl,
+          country: user.profile?.country,
+          reputation: user.profile?.reputation || 0,
+          createdAt: user.createdAt,
         }));
 
       return {
@@ -1846,8 +1906,8 @@ export class UserService {
         pagination: {
           page,
           limit,
-          total: modelIds.length,
-          totalPages: Math.ceil(modelIds.length / limit),
+          total: followedUserIds.length,
+          totalPages: Math.ceil(followedUserIds.length / limit),
         },
       };
     } catch (error: any) {
@@ -1866,37 +1926,34 @@ export class UserService {
   }
 
   /**
-   * Obtener lista de seguidores de un modelo
+   * Obtener lista de seguidores de un usuario (puede ser MODEL, USER o AGENCY)
    */
-  async getFollowers(modelId: string, page: number = 1, limit: number = 20) {
+  async getFollowers(userId: string, page: number = 1, limit: number = 20) {
     try {
-      // Verificar que es un modelo
-      const modelResponse = await this.dynamoClient.send(
+      // Verificar que el usuario existe
+      const userResponse = await this.dynamoClient.send(
         new GetCommand({
           TableName: this.credentials.dynamodb.usersTable,
-          Key: { id: modelId },
+          Key: { id: userId },
         }),
       );
 
-      if (!modelResponse.Item) {
+      if (!userResponse.Item) {
         throw new NotFoundException('Usuario no encontrado');
-      }
-
-      if (modelResponse.Item.role !== 'MODEL' && modelResponse.Item.role !== 'model') {
-        throw new BadRequestException('El usuario no es un modelo');
       }
 
       const skip = (page - 1) * limit;
       const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
 
-      // Consultar seguidores del modelo (requiere GSI modelId-index)
+      // Consultar seguidores del usuario (requiere GSI modelId-index)
+      // Nota: modelId en la tabla contiene el ID del usuario seguido
       const response = await this.dynamoClient.send(
         new QueryCommand({
           TableName: followTable,
           IndexName: 'modelId-index',
           KeyConditionExpression: 'modelId = :modelId',
           ExpressionAttributeValues: {
-            ':modelId': modelId,
+            ':modelId': userId,
           },
           ScanIndexForward: false,
         }),

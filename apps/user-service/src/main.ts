@@ -36,6 +36,9 @@ El **User Service** es el servicio central de gestión de usuarios de la platafo
 - ✅ Gestión de avatares e imágenes
 - ✅ Estadísticas y métricas
 - ✅ Relaciones entre usuarios (modelos-agencia)
+- ✅ **Sistema de seguimiento (Follow)** con reglas de negocio:
+  - MODEL puede seguir a MODEL, USER y AGENCY
+  - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
 - ✅ Administración y moderación
 
 ## 🔐 Autenticación

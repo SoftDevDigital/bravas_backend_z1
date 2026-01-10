@@ -2490,32 +2490,42 @@ Authorization: Bearer {admin_token}
 
   /**
    * POST /users/models/:modelId/follow
-   * Seguir a un modelo
+   * Seguir a un usuario (MODEL, USER o AGENCY según reglas de negocio)
+   * 
+   * **REGLAS DE NEGOCIO:**
+   * - MODEL puede seguir a MODEL, USER y AGENCY
+   * - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
    * 
    * **CASOS DE USO:**
-   * - Usuario quiere seguir a un modelo para ver su contenido
-   * - Agregar modelo a la lista de seguidos
-   * - Recibir actualizaciones del modelo en el feed
+   * - Usuario quiere seguir a otro usuario/modelo para ver su contenido
+   * - Agregar usuario a la lista de seguidos
+   * - Recibir actualizaciones en el feed personalizado
    */
   @Post('models/:modelId/follow')
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
-    summary: '👥 Seguir a un modelo',
+    summary: '👥 Seguir a un usuario',
     description: `
 **¿Para qué sirve?**
-Permite a un usuario seguir a un modelo para ver su contenido en el feed personalizado.
+Permite seguir a otros usuarios (MODEL, USER o AGENCY) según las reglas de negocio.
+
+**REGLAS DE NEGOCIO:**
+- **MODEL** puede seguir a: MODEL, USER y AGENCY
+- **USER** puede seguir a: USER y MODEL (NO puede seguir AGENCY)
 
 **Casos de uso:**
-- Seguir modelos para ver sus posts en el feed
-- Mantener lista de modelos favoritos
+- Seguir usuarios/modelos para ver sus posts en el feed
+- Mantener lista de usuarios favoritos
 - Recibir notificaciones de nuevos posts
+- Modelos pueden seguir a otros modelos o usuarios
+- Usuarios pueden seguir a otros usuarios o modelos
 
 **Restricciones:**
-- Solo usuarios con rol USER pueden seguir modelos
 - No puedes seguirte a ti mismo
-- Si ya sigues al modelo, retorna éxito sin duplicar
+- USER no puede seguir AGENCY
+- Si ya sigues al usuario, retorna éxito sin duplicar
 
 **Ejemplo de uso:**
 \`\`\`
@@ -2523,15 +2533,60 @@ POST /users/models/550e8400-e29b-41d4-a716-446655440000/follow
 Authorization: Bearer {token}
 \`\`\`
 
-**Ejemplo de respuesta:**
+**Ejemplos de respuesta:**
+
+**Caso 1: Seguir a un modelo (desde USER o MODEL)**
 \`\`\`json
 {
   "success": true,
   "message": "Ahora sigues a este modelo",
   "data": {
     "userId": "user_123",
-    "modelId": "550e8400-e29b-41d4-a716-446655440000",
+    "followedUserId": "550e8400-e29b-41d4-a716-446655440000",
+    "followedRole": "model",
     "followedAt": "2024-01-20T15:30:00Z"
+  }
+}
+\`\`\`
+
+**Caso 2: Seguir a un usuario (desde USER o MODEL)**
+\`\`\`json
+{
+  "success": true,
+  "message": "Ahora sigues a este usuario",
+  "data": {
+    "userId": "model_456",
+    "followedUserId": "user_789",
+    "followedRole": "user",
+    "followedAt": "2024-01-20T15:30:00Z"
+  }
+}
+\`\`\`
+
+**Caso 3: Seguir a una agencia (solo desde MODEL)**
+\`\`\`json
+{
+  "success": true,
+  "message": "Ahora sigues a esta agencia",
+  "data": {
+    "userId": "model_456",
+    "followedUserId": "agency_123",
+    "followedRole": "agency",
+    "followedAt": "2024-01-20T15:30:00Z"
+  }
+}
+\`\`\`
+
+**Caso 4: Ya sigues al usuario**
+\`\`\`json
+{
+  "success": true,
+  "message": "Ya sigues a este usuario",
+  "data": {
+    "userId": "user_123",
+    "followedUserId": "550e8400-e29b-41d4-a716-446655440000",
+    "followedRole": "model",
+    "followedAt": "2024-01-15T10:00:00Z"
   }
 }
 \`\`\`
@@ -2539,18 +2594,18 @@ Authorization: Bearer {token}
   })
   @ApiParam({
     name: 'modelId',
-    description: 'ID único del modelo a seguir',
+    description: 'ID único del usuario a seguir (puede ser MODEL, USER o AGENCY)',
     example: '550e8400-e29b-41d4-a716-446655440000',
     type: String,
   })
   @ApiResponse({
     status: 201,
-    description: '✅ Ahora sigues a este modelo',
+    description: '✅ Ahora sigues a este usuario',
     type: ApiResponseDto,
   })
   @ApiResponse({
     status: 400,
-    description: '❌ No puedes seguirte a ti mismo o el usuario no es un modelo',
+    description: '❌ No puedes seguirte a ti mismo o el usuario no existe',
   })
   @ApiResponse({
     status: 401,
@@ -2558,44 +2613,71 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 403,
-    description: '❌ Solo usuarios con rol USER pueden seguir modelos',
+    description: '❌ Restricción de rol: USER no puede seguir AGENCY, o tu rol no puede seguir usuarios',
   })
   @ApiResponse({
     status: 404,
-    description: '❌ Modelo no encontrado',
+    description: '❌ Usuario a seguir no encontrado',
   })
   async followModel(@Param('modelId') modelId: string, @Request() req: any) {
     const userInfo = await getUserFromToken(req.token);
     
-    // Solo usuarios USER pueden seguir modelos
-    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
-      throw new ForbiddenException('Solo usuarios con rol USER pueden seguir modelos');
+    // Validar que el usuario tenga un rol válido para seguir
+    const userRole = userInfo.role?.toLowerCase();
+    if (userRole !== 'user' && userRole !== 'model') {
+      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden seguir otros usuarios');
     }
 
-    return this.userService.followModel(userInfo.userId, modelId);
+    return this.userService.followModel(userInfo.userId, modelId, userInfo.role);
   }
 
   /**
    * DELETE /users/models/:modelId/follow
-   * Dejar de seguir a un modelo
+   * Dejar de seguir a un usuario (MODEL, USER o AGENCY)
    */
   @Delete('models/:modelId/follow')
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
-    summary: '👥 Dejar de seguir a un modelo',
-    description: 'Deja de seguir a un modelo. Ya no verás su contenido en tu feed personalizado.',
+    summary: '👥 Dejar de seguir a un usuario',
+    description: `
+**¿Para qué sirve?**
+Permite dejar de seguir a un usuario (MODEL, USER o AGENCY) que estabas siguiendo.
+
+**Casos de uso:**
+- Dejar de seguir usuarios/modelos/agencias
+- Ya no verás su contenido en tu feed personalizado
+- Limpiar tu lista de seguidos
+
+**Restricciones:**
+- Solo usuarios con rol USER o MODEL pueden dejar de seguir
+- Debes estar siguiendo al usuario para poder dejar de seguirlo
+
+**Ejemplo de uso:**
+\`\`\`
+DELETE /users/models/550e8400-e29b-41d4-a716-446655440000/follow
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "message": "Dejaste de seguir a este modelo"
+}
+\`\`\`
+    `.trim(),
   })
   @ApiParam({
     name: 'modelId',
-    description: 'ID único del modelo a dejar de seguir',
+    description: 'ID único del usuario a dejar de seguir (puede ser MODEL, USER o AGENCY)',
     example: '550e8400-e29b-41d4-a716-446655440000',
     type: String,
   })
   @ApiResponse({
     status: 200,
-    description: '✅ Dejaste de seguir a este modelo',
+    description: '✅ Dejaste de seguir a este usuario',
     type: ApiResponseDto,
   })
   @ApiResponse({
@@ -2603,14 +2685,19 @@ Authorization: Bearer {token}
     description: '❌ No autenticado',
   })
   @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER o MODEL pueden dejar de seguir',
+  })
+  @ApiResponse({
     status: 404,
-    description: '❌ No estás siguiendo a este modelo',
+    description: '❌ No estás siguiendo a este usuario',
   })
   async unfollowModel(@Param('modelId') modelId: string, @Request() req: any) {
     const userInfo = await getUserFromToken(req.token);
     
-    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
-      throw new ForbiddenException('Solo usuarios con rol USER pueden dejar de seguir modelos');
+    const userRole = userInfo.role?.toLowerCase();
+    if (userRole !== 'user' && userRole !== 'model') {
+      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden dejar de seguir usuarios');
     }
 
     return this.userService.unfollowModel(userInfo.userId, modelId);
@@ -2618,15 +2705,60 @@ Authorization: Bearer {token}
 
   /**
    * GET /users/me/following
-   * Listar modelos que sigo
+   * Listar usuarios que sigo (pueden ser MODEL, USER o AGENCY)
    */
   @Get('me/following')
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
-    summary: '👥 Listar modelos que sigo',
-    description: 'Retorna la lista de modelos que el usuario autenticado está siguiendo.',
+    summary: '👥 Listar usuarios que sigo',
+    description: `
+**¿Para qué sirve?**
+Retorna la lista paginada de usuarios (MODEL, USER o AGENCY) que el usuario autenticado está siguiendo.
+
+**REGLAS DE NEGOCIO:**
+- **MODEL** puede seguir a: MODEL, USER y AGENCY
+- **USER** puede seguir a: USER y MODEL (NO puede seguir AGENCY)
+
+**Casos de uso:**
+- Ver lista de usuarios/modelos/agencias que sigues
+- Gestionar tu lista de seguidos
+- Ver información de los usuarios seguidos
+
+**Ejemplo de uso:**
+\`\`\`
+GET /users/me/following?page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "userId": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "modelo@example.com",
+      "fullName": "Modelo Ejemplo",
+      "role": "model",
+      "verified": true,
+      "bio": "Modelo profesional",
+      "avatarUrl": "https://...",
+      "country": "AR",
+      "reputation": 95,
+      "createdAt": "2024-01-15T10:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 5,
+    "totalPages": 1
+  }
+}
+\`\`\`
+    `.trim(),
   })
   @ApiQuery({
     name: 'page',
@@ -2644,12 +2776,16 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 200,
-    description: '✅ Lista de modelos seguidos obtenida exitosamente',
-    type: ApiResponseDto<ModelProfileDto[]>,
+    description: '✅ Lista de usuarios seguidos obtenida exitosamente',
+    type: ApiResponseDto,
   })
   @ApiResponse({
     status: 401,
     description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo usuarios con rol USER o MODEL pueden ver sus seguidos',
   })
   async getFollowing(
     @Request() req: any,
@@ -2658,8 +2794,9 @@ Authorization: Bearer {token}
   ) {
     const userInfo = await getUserFromToken(req.token);
     
-    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
-      throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus seguidos');
+    const userRole = userInfo.role?.toLowerCase();
+    if (userRole !== 'user' && userRole !== 'model') {
+      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden ver sus seguidos');
     }
 
     return this.userService.getFollowing(
@@ -2671,17 +2808,58 @@ Authorization: Bearer {token}
 
   /**
    * GET /users/:id/followers
-   * Ver seguidores de un usuario (solo para modelos)
+   * Ver seguidores de un usuario (puede ser MODEL, USER o AGENCY)
    */
   @Get(':id/followers')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: '👥 Ver seguidores de un usuario',
-    description: 'Retorna la lista de usuarios que siguen a este modelo. Solo disponible para modelos.',
+    description: `
+**¿Para qué sirve?**
+Retorna la lista paginada de usuarios que siguen a este usuario. Disponible para cualquier usuario que tenga seguidores (MODEL, USER o AGENCY).
+
+**Casos de uso:**
+- Ver quién te está siguiendo
+- Ver seguidores de otros usuarios/modelos/agencias
+- Analizar tu audiencia
+- Verificar popularidad de un perfil
+
+**Notas:**
+- No requiere autenticación (endpoint público)
+- Disponible para cualquier usuario con seguidores
+- Los seguidores pueden ser de cualquier rol (USER, MODEL, AGENCY según reglas)
+
+**Ejemplo de uso:**
+\`\`\`
+GET /users/550e8400-e29b-41d4-a716-446655440000/followers?page=1&limit=20
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": [
+    {
+      "userId": "user_123",
+      "email": "usuario@example.com",
+      "fullName": "Usuario Ejemplo",
+      "avatarUrl": "https://...",
+      "createdAt": "2024-01-10T08:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 150,
+    "totalPages": 8
+  }
+}
+\`\`\`
+    `.trim(),
   })
   @ApiParam({
     name: 'id',
-    description: 'ID único del modelo',
+    description: 'ID único del usuario (puede ser MODEL, USER o AGENCY)',
     example: '550e8400-e29b-41d4-a716-446655440000',
     type: String,
   })
@@ -2702,11 +2880,7 @@ Authorization: Bearer {token}
   @ApiResponse({
     status: 200,
     description: '✅ Lista de seguidores obtenida exitosamente',
-    type: ApiResponseDto<UserProfileDto[]>,
-  })
-  @ApiResponse({
-    status: 400,
-    description: '❌ El usuario no es un modelo',
+    type: ApiResponseDto,
   })
   @ApiResponse({
     status: 404,
