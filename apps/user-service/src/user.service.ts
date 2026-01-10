@@ -607,7 +607,16 @@ export class UserService {
       };
 
       // Si es modelo, obtener estadísticas adicionales
-      if (profile.role === 'MODEL') {
+      // Verificar rol del usuario, no del perfil (el rol está en la tabla de usuarios)
+      const userResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: userId },
+        }),
+      );
+      const userRole = userResponse.Item?.role?.toLowerCase();
+      
+      if (userRole === UserRole.MODEL) {
         // Contar compradores únicos desde relaciones
         try {
           const buyersResponse = await this.dynamoClient.send(
@@ -669,7 +678,12 @@ export class UserService {
         }),
       );
 
-      if (!modelResponse.Item || modelResponse.Item.role !== 'MODEL') {
+      if (!modelResponse.Item) {
+        throw new NotFoundException('Modelo no encontrado');
+      }
+
+      const modelRole = modelResponse.Item.role?.toLowerCase();
+      if (modelRole !== UserRole.MODEL) {
         throw new NotFoundException('Modelo no encontrado');
       }
 
@@ -681,7 +695,12 @@ export class UserService {
         }),
       );
 
-      if (!agencyResponse.Item || agencyResponse.Item.role !== 'AGENCY') {
+      if (!agencyResponse.Item) {
+        throw new NotFoundException('Agencia no encontrada');
+      }
+
+      const agencyRole = agencyResponse.Item.role?.toLowerCase();
+      if (agencyRole !== UserRole.AGENCY) {
         throw new NotFoundException('Agencia no encontrada');
       }
 
@@ -725,7 +744,12 @@ export class UserService {
         }),
       );
 
-      if (!agencyResponse.Item || agencyResponse.Item.role !== 'AGENCY') {
+      if (!agencyResponse.Item) {
+        throw new NotFoundException('Agencia no encontrada');
+      }
+
+      const agencyRole = agencyResponse.Item.role?.toLowerCase();
+      if (agencyRole !== UserRole.AGENCY) {
         throw new NotFoundException('Agencia no encontrada');
       }
 
@@ -737,7 +761,12 @@ export class UserService {
         }),
       );
 
-      if (!modelResponse.Item || modelResponse.Item.role !== 'MODEL') {
+      if (!modelResponse.Item) {
+        throw new NotFoundException('Modelo no encontrado');
+      }
+
+      const modelRole = modelResponse.Item.role?.toLowerCase();
+      if (modelRole !== UserRole.MODEL) {
         throw new NotFoundException('Modelo no encontrado');
       }
 
@@ -924,8 +953,11 @@ export class UserService {
       }
 
       const user = userResponse.Item;
+      
+      // Normalizar el rol a minúsculas para comparación
+      const userRole = user.role?.toLowerCase();
 
-      if (user.role !== 'MODEL') {
+      if (userRole !== UserRole.MODEL) {
         throw new BadRequestException('El usuario no es un modelo');
       }
 
@@ -996,8 +1028,11 @@ export class UserService {
       }
 
       const user = userResponse.Item;
+      
+      // Normalizar el rol a minúsculas para comparación
+      const userRole = user.role?.toLowerCase();
 
-      if (user.role !== 'AGENCY') {
+      if (userRole !== UserRole.AGENCY) {
         throw new BadRequestException('El usuario no es una agencia');
       }
 

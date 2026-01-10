@@ -1835,6 +1835,13 @@ Authorization: Bearer {token} (opcional)
     @Param('id') modelId: string,
     @Request() req: any,
   ) {
+    // Limpiar el ID de espacios en blanco
+    const cleanModelId = modelId?.trim();
+    
+    if (!cleanModelId) {
+      throw new BadRequestException('ID de modelo no válido');
+    }
+
     let requesterRole: UserRole | undefined;
     try {
       if (req.headers.authorization) {
@@ -1846,7 +1853,7 @@ Authorization: Bearer {token} (opcional)
       // Continuar sin rol (perfil público)
     }
 
-    return this.userService.getModelProfile(modelId, requesterRole);
+    return this.userService.getModelProfile(cleanModelId, requesterRole);
   }
 
   /**
