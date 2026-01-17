@@ -66,12 +66,72 @@ export function loadCredentials(environment: string = 'dev'): Credentials {
 
   // Intentar cargar desde variables de entorno primero
   const envCredentials = loadFromEnvironment();
+  
+  // Cargar archivo JSON para tener fallbacks
+  const fileCredentials = loadFromFile(normalizedEnv);
+  
   if (envCredentials) {
-    return envCredentials;
+    // Si tenemos credenciales de entorno, combinarlas con el archivo JSON
+    return {
+      ...envCredentials,
+      dynamodb: {
+        ...fileCredentials.dynamodb,
+        ...envCredentials.dynamodb,
+        // Asegurar que las tablas principales usen valores del archivo JSON si están vacías
+        usersTable: envCredentials.dynamodb.usersTable || fileCredentials.dynamodb.usersTable,
+        userProfilesTable: envCredentials.dynamodb.userProfilesTable || fileCredentials.dynamodb.userProfilesTable,
+        modelAgencyRelationsTable: envCredentials.dynamodb.modelAgencyRelationsTable || fileCredentials.dynamodb.modelAgencyRelationsTable,
+        agencyAgencyRelationsTable: envCredentials.dynamodb.agencyAgencyRelationsTable || fileCredentials.dynamodb.agencyAgencyRelationsTable,
+        userModelRelationsTable: envCredentials.dynamodb.userModelRelationsTable || fileCredentials.dynamodb.userModelRelationsTable,
+      },
+    };
   }
 
-  // Si no hay variables de entorno, cargar desde archivo JSON
-  return loadFromFile(normalizedEnv);
+  // Si no hay credenciales de entorno completas, cargar desde archivo JSON
+  // pero usar variables de entorno de DynamoDB si están disponibles (para desarrollo local)
+  const envDynamoDBTables = {
+    usersTable: process.env.DYNAMODB_USERS_TABLE || '',
+    userProfilesTable: process.env.DYNAMODB_USER_PROFILES_TABLE || '',
+    modelAgencyRelationsTable: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '',
+    agencyAgencyRelationsTable: process.env.DYNAMODB_AGENCY_AGENCY_RELATIONS_TABLE || '',
+    userModelRelationsTable: process.env.DYNAMODB_USER_MODEL_RELATIONS_TABLE || '',
+    userFollowsTable: process.env.DYNAMODB_USER_FOLLOWS_TABLE || '',
+  };
+  
+  // Debug: Mostrar qué variables se están usando (solo en desarrollo)
+  // IMPORTANTE: Mostrar siempre en dev para debugging de este problema
+  if (normalizedEnv === 'dev') {
+    console.log('🔍 [loadCredentials] Variables de DynamoDB:', {
+      desdeEntorno: {
+        modelAgencyRelationsTable: envDynamoDBTables.modelAgencyRelationsTable || '❌ NO CONFIGURADA',
+      },
+      desdeArchivo: {
+        modelAgencyRelationsTable: fileCredentials.dynamodb.modelAgencyRelationsTable || '❌ NO EN ARCHIVO',
+      },
+      processEnv: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '❌ NO EN PROCESS.ENV',
+    });
+  }
+  
+  const finalCredentials = {
+    ...fileCredentials,
+    dynamodb: {
+      ...fileCredentials.dynamodb,
+      // Usar variables de entorno si están disponibles, sino usar valores del archivo JSON
+      usersTable: envDynamoDBTables.usersTable || fileCredentials.dynamodb.usersTable,
+      userProfilesTable: envDynamoDBTables.userProfilesTable || fileCredentials.dynamodb.userProfilesTable,
+      modelAgencyRelationsTable: envDynamoDBTables.modelAgencyRelationsTable || fileCredentials.dynamodb.modelAgencyRelationsTable,
+      agencyAgencyRelationsTable: envDynamoDBTables.agencyAgencyRelationsTable || fileCredentials.dynamodb.agencyAgencyRelationsTable,
+      userModelRelationsTable: envDynamoDBTables.userModelRelationsTable || fileCredentials.dynamodb.userModelRelationsTable,
+      userFollowsTable: envDynamoDBTables.userFollowsTable || fileCredentials.dynamodb.userFollowsTable,
+    },
+  };
+  
+  // Validar que modelAgencyRelationsTable esté configurada
+  if (!finalCredentials.dynamodb.modelAgencyRelationsTable || finalCredentials.dynamodb.modelAgencyRelationsTable.trim() === '') {
+    console.warn('⚠️  ADVERTENCIA: DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE no está configurada. Verifica .env.dev o credentials.dev.json');
+  }
+  
+  return finalCredentials;
 }
 
 /**
@@ -83,6 +143,11 @@ function loadFromEnvironment(): Credentials | null {
   const hasAccessKey = !!process.env.AWS_ACCESS_KEY_ID;
   const hasSecretKey = !!process.env.AWS_SECRET_ACCESS_KEY;
   
+  // Para desarrollo local, permitir cargar variables de DynamoDB incluso sin credenciales de AWS
+  // (útil para pruebas con DynamoDB local o cuando las credenciales están en archivos JSON)
+  const isLocalDev = (process.env.NODE_ENV === 'dev' || process.env.ENVIRONMENT === 'dev') && 
+                     (!hasRegion || !hasAccessKey || !hasSecretKey);
+  
   // Verificar si tenemos las variables mínimas de AWS
   if (!hasRegion || !hasAccessKey || !hasSecretKey) {
     // Si estamos en modo debug, mostrar qué falta
@@ -91,8 +156,11 @@ function loadFromEnvironment(): Credentials | null {
         AWS_REGION: hasRegion,
         AWS_ACCESS_KEY_ID: hasAccessKey,
         AWS_SECRET_ACCESS_KEY: hasSecretKey,
+        isLocalDev,
       });
     }
+    // En desarrollo local, retornar null para cargar desde archivo JSON
+    // pero las variables de entorno de DynamoDB seguirán disponibles en process.env
     return null;
   }
 

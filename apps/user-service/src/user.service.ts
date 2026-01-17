@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand, QueryCommand, ScanCommand, PutCommand, BatchGetCommand, BatchWriteCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
@@ -18,8 +19,26 @@ export class UserService {
     private configService: ConfigService,
     private cacheService: CacheService,
   ) {
+    console.log('🔍 [UserService] Constructor - Iniciando carga de credenciales...');
+    console.log('🔍 [UserService] Constructor - Variables de entorno antes de loadCredentials():', {
+      DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '❌ NO DEFINIDA',
+      NODE_ENV: process.env.NODE_ENV || '❌ NO DEFINIDA',
+      ENVIRONMENT: process.env.ENVIRONMENT || '❌ NO DEFINIDA',
+    });
+    
     this.credentials = loadCredentials();
+    
+    console.log('🔍 [UserService] Constructor - Credenciales cargadas:', {
+      modelAgencyRelationsTable: this.credentials.dynamodb.modelAgencyRelationsTable || '❌ VACIA',
+      usersTable: this.credentials.dynamodb.usersTable || '❌ VACIA',
+      userProfilesTable: this.credentials.dynamodb.userProfilesTable || '❌ VACIA',
+      awsRegion: this.credentials.aws.region || '❌ NO CONFIGURADA',
+      awsAccessKeyId: this.credentials.aws.accessKeyId ? '✅ CONFIGURADA' : '❌ NO CONFIGURADA',
+      awsSecretAccessKey: this.credentials.aws.secretAccessKey ? '✅ CONFIGURADA' : '❌ NO CONFIGURADA',
+    });
+    
     this.dynamoClient = AWSClientFactory.createDynamoDBDocumentClient() as DynamoDBDocumentClient;
+    console.log('🔍 [UserService] Constructor - Servicio inicializado correctamente');
   }
 
   /**
@@ -91,6 +110,42 @@ export class UserService {
         throw new NotFoundException('Usuario no encontrado. Verifica que el ID sea correcto.');
       }
 
+      // VALIDACIÓN CRÍTICA: Alias debe ser único en TODA la base de datos (todos los roles)
+      // Los alias NUNCA se pueden repetir entre usuarios, sin importar el rol
+      if (updateDto.alias !== undefined && updateDto.alias !== null) {
+        // Normalizar alias: asegurar formato @ejemplo en minúsculas
+        const aliasNormalized = updateDto.alias.trim().toLowerCase();
+        const aliasWithAt = aliasNormalized.startsWith('@') ? aliasNormalized : `@${aliasNormalized}`;
+        
+        // Buscar si existe otro usuario (cualquier rol) con este alias
+        // IMPORTANTE: Excluir al usuario actual (userId) de la búsqueda
+        const aliasCheckResponse = await this.dynamoClient.send(
+          new ScanCommand({
+            TableName: this.credentials.dynamodb.usersTable,
+            FilterExpression: '#alias = :alias AND id <> :currentUserId',
+            ExpressionAttributeNames: {
+              '#alias': 'alias',
+            },
+            ExpressionAttributeValues: {
+              ':alias': aliasWithAt,
+              ':currentUserId': userId,
+            },
+            Limit: 1, // Solo necesitamos saber si existe al menos uno
+          }),
+        );
+
+        if (aliasCheckResponse.Items && aliasCheckResponse.Items.length > 0) {
+          throw new ConflictException(
+            `El alias ${aliasWithAt} ya está en uso por otro usuario. ` +
+            `Los alias deben ser únicos en toda la plataforma, sin importar el rol. ` +
+            `Por favor, elige otro alias.`
+          );
+        }
+
+        // Actualizar el alias normalizado en el DTO
+        updateDto.alias = aliasWithAt;
+      }
+
       // Actualizar en tabla users
       const updateExpression: string[] = [];
       const expressionAttributeValues: Record<string, any> = {};
@@ -121,6 +176,24 @@ export class UserService {
           ExpressionAttributeValues: expressionAttributeValues,
         }),
       );
+
+      // Validar estructura de preferences.notifications si viene
+      if (updateDto.preferences?.notifications) {
+        const notifications = updateDto.preferences.notifications;
+        // Asegurar estructura completa con valores por defecto
+        const normalizedNotifications = {
+          messages: notifications.messages !== undefined ? Boolean(notifications.messages) : true,
+          contracts: notifications.contracts !== undefined ? Boolean(notifications.contracts) : true,
+          transfers: notifications.transfers !== undefined ? Boolean(notifications.transfers) : true,
+          payments: notifications.payments !== undefined ? Boolean(notifications.payments) : true,
+          general: notifications.general !== undefined ? Boolean(notifications.general) : true,
+        };
+        // Reemplazar con la estructura normalizada
+        updateDto.preferences = {
+          ...updateDto.preferences,
+          notifications: normalizedNotifications,
+        };
+      }
 
       // Actualizar en tabla user_profiles si hay campos de perfil
       const profileFields = ['bio', 'avatarUrl', 'preferences'];
@@ -171,6 +244,159 @@ export class UserService {
         throw error;
       }
       throw new BadRequestException(`Error al actualizar perfil: ${error.message}`);
+    }
+  }
+
+  /**
+   * Actualizar configuración de disponibilidad para representación (solo modelos)
+   */
+  async updateAvailability(userId: string, availabilityDto: {
+    available?: boolean;
+    contractTypes?: string[];
+    advancePayment?: number;
+    notes?: string;
+  }) {
+    try {
+      // Verificar que el usuario existe y es un modelo
+      const userResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: userId },
+        }),
+      );
+
+      if (!userResponse.Item) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      const user = userResponse.Item;
+      const userRole = user.role?.toLowerCase();
+
+      if (userRole !== UserRole.MODEL) {
+        throw new ForbiddenException('Solo los modelos pueden configurar su disponibilidad para representación');
+      }
+
+      // Obtener perfil actual
+      const profileResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.userProfilesTable,
+          Key: { userId },
+        }),
+      );
+
+      const profile = profileResponse.Item || {};
+      const existingAvailability = profile.availability || {};
+
+      // Construir objeto de disponibilidad actualizado (merge con existente)
+      const updatedAvailability: any = {
+        available: availabilityDto.available !== undefined ? availabilityDto.available : (existingAvailability.available ?? false),
+        contractTypes: availabilityDto.contractTypes !== undefined ? availabilityDto.contractTypes : (existingAvailability.contractTypes || []),
+        advancePayment: null,
+        notes: availabilityDto.notes !== undefined ? availabilityDto.notes : (existingAvailability.notes ?? null),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Validar advancePayment según contractTypes
+      if (updatedAvailability.contractTypes.includes('with_advance')) {
+        if (availabilityDto.advancePayment !== undefined) {
+          updatedAvailability.advancePayment = availabilityDto.advancePayment;
+        } else if (existingAvailability.advancePayment !== undefined) {
+          updatedAvailability.advancePayment = existingAvailability.advancePayment;
+        } else {
+          updatedAvailability.advancePayment = null;
+        }
+      } else {
+        // Si no incluye with_advance, no puede tener advancePayment
+        if (availabilityDto.advancePayment !== undefined && availabilityDto.advancePayment !== null) {
+          throw new BadRequestException('No puedes establecer un anticipo sin incluir "with_advance" en contractTypes');
+        }
+        updatedAvailability.advancePayment = null;
+      }
+
+      // Actualizar en userProfiles
+      await this.dynamoClient.send(
+        new UpdateCommand({
+          TableName: this.credentials.dynamodb.userProfilesTable,
+          Key: { userId },
+          UpdateExpression: 'SET availability = :availability, updatedAt = :updatedAt',
+          ExpressionAttributeValues: {
+            ':availability': updatedAvailability,
+            ':updatedAt': new Date().toISOString(),
+          },
+        }),
+      );
+
+      // Invalidar caché del perfil
+      const cacheKey = CacheService.getUserProfileCacheKey(userId);
+      await this.cacheService.delete(cacheKey);
+
+      return {
+        success: true,
+        data: {
+          availability: updatedAvailability,
+        },
+        message: 'Disponibilidad actualizada exitosamente',
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException || error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al actualizar disponibilidad: ${error.message || 'Error desconocido'}`);
+    }
+  }
+
+  /**
+   * Obtener configuración de disponibilidad (solo modelos)
+   */
+  async getAvailability(userId: string) {
+    try {
+      // Verificar que el usuario existe y es un modelo
+      const userResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.usersTable,
+          Key: { id: userId },
+        }),
+      );
+
+      if (!userResponse.Item) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      const user = userResponse.Item;
+      const userRole = user.role?.toLowerCase();
+
+      if (userRole !== UserRole.MODEL) {
+        throw new ForbiddenException('Solo los modelos pueden ver su disponibilidad para representación');
+      }
+
+      // Obtener perfil
+      const profileResponse = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.credentials.dynamodb.userProfilesTable,
+          Key: { userId },
+        }),
+      );
+
+      const profile = profileResponse.Item || {};
+      const availability = profile.availability || {
+        available: false,
+        contractTypes: [],
+        advancePayment: null,
+        notes: null,
+        updatedAt: null,
+      };
+
+      return {
+        success: true,
+        data: {
+          availability,
+        },
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al obtener disponibilidad: ${error.message || 'Error desconocido'}`);
     }
   }
 
@@ -314,7 +540,14 @@ export class UserService {
         items = items.filter((item) => {
           const email = (item.email || '').toLowerCase();
           const fullName = (item.fullName || '').toLowerCase();
-          return email.includes(searchLower) || fullName.includes(searchLower);
+          // Buscar por nombre o alias, NO por email
+          const fullNameNormalized = ((item.fullName || '') as string).toLowerCase().trim();
+          const alias = ((item.alias || '') as string).toLowerCase().trim();
+          const aliasWithoutAt = alias.startsWith('@') ? alias.substring(1) : alias;
+          const searchNormalized = searchLower.startsWith('@') ? searchLower.substring(1) : searchLower;
+          return fullNameNormalized.includes(searchNormalized) || 
+                 alias.includes(searchLower) || 
+                 aliasWithoutAt.includes(searchNormalized);
         });
       }
 
@@ -356,24 +589,32 @@ export class UserService {
       const limit = Math.min(query.limit || 20, 100);
       const skip = (page - 1) * limit;
 
-      // Buscar usuarios con rol MODEL
+      // Buscar usuarios con rol MODEL (case-insensitive)
+      // Primero obtener todos los usuarios con rol MODEL (normalizar a minúsculas para comparar)
       const scanParams: any = {
         TableName: this.credentials.dynamodb.usersTable,
-        FilterExpression: '#role = :role',
-        ExpressionAttributeNames: { '#role': 'role' },
-        ExpressionAttributeValues: { ':role': 'MODEL' },
       };
 
       const response = await this.dynamoClient.send(new ScanCommand(scanParams));
-      let items = response.Items || [];
+      let items = (response.Items || []).filter((item) => {
+        // Normalizar rol para comparación case-insensitive
+        const role = (item.role || '').toString().trim().toLowerCase();
+        return role === 'model';
+      });
 
-      // Filtrar por búsqueda
+      // Filtrar por búsqueda (buscar por nombre o alias, NO por email)
       if (query.search) {
         const searchLower = query.search.toLowerCase();
+        // Normalizar búsqueda: si viene con @, removerlo para buscar solo el alias sin @
+        const searchNormalized = searchLower.startsWith('@') ? searchLower.substring(1) : searchLower;
         items = items.filter((item) => {
-          const email = (item.email || '').toLowerCase();
-          const fullName = (item.fullName || '').toLowerCase();
-          return email.includes(searchLower) || fullName.includes(searchLower);
+          const fullName = ((item.fullName || '') as string).toLowerCase().trim();
+          const alias = ((item.alias || '') as string).toLowerCase().trim();
+          const aliasWithoutAt = alias.startsWith('@') ? alias.substring(1) : alias;
+          // Buscar en nombre completo o en alias (con o sin @)
+          return fullName.includes(searchNormalized) || 
+                 alias.includes(searchLower) || 
+                 aliasWithoutAt.includes(searchNormalized);
         });
       }
 
@@ -425,6 +666,7 @@ export class UserService {
         userId: item.id || item.userId,
         email: item.email,
         fullName: item.fullName,
+        alias: item.alias, // Incluir alias para búsquedas
         role: item.role,
         verified: item.verified || false,
         country: item.country,
@@ -471,16 +713,18 @@ export class UserService {
       const limit = Math.min(query.limit || 20, 100);
       const skip = (page - 1) * limit;
 
-      // Buscar usuarios con rol AGENCY
+      // Buscar usuarios con rol AGENCY (case-insensitive)
+      // Primero obtener todos los usuarios y filtrar por rol normalizado
       const scanParams: any = {
         TableName: this.credentials.dynamodb.usersTable,
-        FilterExpression: '#role = :role',
-        ExpressionAttributeNames: { '#role': 'role' },
-        ExpressionAttributeValues: { ':role': 'AGENCY' },
       };
 
       const response = await this.dynamoClient.send(new ScanCommand(scanParams));
-      let items = response.Items || [];
+      let items = (response.Items || []).filter((item) => {
+        // Normalizar rol para comparación case-insensitive
+        const role = (item.role || '').toString().trim().toLowerCase();
+        return role === 'agency';
+      });
 
       // Filtrar por búsqueda
       if (query.search) {
@@ -488,7 +732,14 @@ export class UserService {
         items = items.filter((item) => {
           const email = (item.email || '').toLowerCase();
           const fullName = (item.fullName || '').toLowerCase();
-          return email.includes(searchLower) || fullName.includes(searchLower);
+          // Buscar por nombre o alias, NO por email
+          const fullNameNormalized = ((item.fullName || '') as string).toLowerCase().trim();
+          const alias = ((item.alias || '') as string).toLowerCase().trim();
+          const aliasWithoutAt = alias.startsWith('@') ? alias.substring(1) : alias;
+          const searchNormalized = searchLower.startsWith('@') ? searchLower.substring(1) : searchLower;
+          return fullNameNormalized.includes(searchNormalized) || 
+                 alias.includes(searchLower) || 
+                 aliasWithoutAt.includes(searchNormalized);
         });
       }
 
@@ -502,8 +753,8 @@ export class UserService {
         items = items.filter((item) => item.verified === query.verified);
       }
 
-      // Obtener perfiles
-      const agenciesWithProfiles = await Promise.all(
+      // Obtener perfiles y calcular información adicional
+      let agenciesWithProfiles = await Promise.all(
         items.map(async (user) => {
           const profileResponse = await this.dynamoClient.send(
             new GetCommand({
@@ -512,23 +763,82 @@ export class UserService {
             }),
           );
 
+          const profile = profileResponse.Item || {};
+
+          // Calcular totalModels desde modelAgencyRelationsTable si no existe en perfil
+          let totalModels = profile.totalModels ?? 0;
+          if (!totalModels) {
+            totalModels = await this.getAgencyModelsCount(user.id || user.userId);
+          }
+
           return {
             ...user,
-            profile: profileResponse.Item || {},
+            profile: {
+              ...profile,
+              // Valores por defecto para campos que pueden no existir
+              totalModels,
+              rating: profile.rating ?? 0,
+              experience: profile.experience ?? 0,
+              recommended: profile.recommended ?? false,
+            },
           };
         }),
       );
 
+      // Filtrar por agencias recomendadas
+      if (query.recommended !== undefined && query.recommended === true) {
+        agenciesWithProfiles = agenciesWithProfiles.filter((item: any) => item.profile?.recommended === true);
+      }
+
+      // Filtrar por rating mínimo
+      if (query.minRating !== undefined && query.minRating !== null) {
+        agenciesWithProfiles = agenciesWithProfiles.filter((item: any) => {
+          const rating = item.profile?.rating ?? 0;
+          return rating >= query.minRating;
+        });
+      }
+
+      // Filtrar por experiencia mínima
+      if (query.minExperience !== undefined && query.minExperience !== null) {
+        agenciesWithProfiles = agenciesWithProfiles.filter((item: any) => {
+          const experience = item.profile?.experience ?? 0;
+          return experience >= query.minExperience;
+        });
+      }
+
+      // Filtrar por cantidad mínima de modelos
+      if (query.minModels !== undefined && query.minModels !== null) {
+        agenciesWithProfiles = agenciesWithProfiles.filter((item: any) => {
+          const totalModels = item.profile?.totalModels ?? 0;
+          return totalModels >= query.minModels;
+        });
+      }
+
       // Ordenar
       const sortBy = query.sortBy || 'createdAt';
       const order = query.order || 'desc';
-      agenciesWithProfiles.sort((a, b) => {
-        const aVal = a[sortBy] || a.profile[sortBy] || '';
-        const bVal = b[sortBy] || b.profile[sortBy] || '';
-        if (order === 'asc') {
-          return aVal > bVal ? 1 : -1;
+      agenciesWithProfiles.sort((a: any, b: any) => {
+        // Obtener valor del campo a ordenar (puede estar en user o profile)
+        let aVal: any = a[sortBy];
+        if (aVal === undefined || aVal === null) {
+          aVal = a.profile?.[sortBy] ?? '';
         }
-        return aVal < bVal ? 1 : -1;
+        
+        let bVal: any = b[sortBy];
+        if (bVal === undefined || bVal === null) {
+          bVal = b.profile?.[sortBy] ?? '';
+        }
+
+        // Comparación numérica para campos numéricos
+        if (['rating', 'experience', 'totalModels', 'reputation', 'totalSales'].includes(sortBy)) {
+          aVal = Number(aVal) || 0;
+          bVal = Number(bVal) || 0;
+        }
+
+        if (order === 'asc') {
+          return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+        }
+        return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
       });
 
       // Paginación
@@ -548,6 +858,9 @@ export class UserService {
         agencyName: item.profile?.agencyName,
         agencyType: item.profile?.agencyType,
         totalModels: item.profile?.totalModels || 0,
+        rating: item.profile?.rating || 0,
+        experience: item.profile?.experience || 0,
+        recommended: item.profile?.recommended || false,
         createdAt: item.createdAt,
       }));
 
@@ -669,7 +982,15 @@ export class UserService {
    * Aplicar a una agencia (modelo postulándose)
    */
   async applyToAgency(modelId: string, agencyId: string, message: string) {
+    console.log('🔍 [applyToAgency] INICIO - Parámetros recibidos:', {
+      modelId,
+      agencyId,
+      messageLength: message?.length || 0,
+      tableName: this.credentials.dynamodb.modelAgencyRelationsTable || '❌ NO CONFIGURADA',
+    });
+    
     try {
+      console.log('🔍 [applyToAgency] Paso 1: Verificando que el modelo existe...');
       // Verificar que el modelo existe
       const modelResponse = await this.dynamoClient.send(
         new GetCommand({
@@ -683,10 +1004,13 @@ export class UserService {
       }
 
       const modelRole = modelResponse.Item.role?.toLowerCase();
+      console.log('🔍 [applyToAgency] Paso 1: Modelo encontrado, rol:', modelRole);
       if (modelRole !== UserRole.MODEL) {
+        console.log('❌ [applyToAgency] Paso 1: ERROR - El usuario no es un modelo');
         throw new NotFoundException('Modelo no encontrado');
       }
 
+      console.log('🔍 [applyToAgency] Paso 2: Verificando que la agencia existe...');
       // Verificar que la agencia existe
       const agencyResponse = await this.dynamoClient.send(
         new GetCommand({
@@ -700,34 +1024,145 @@ export class UserService {
       }
 
       const agencyRole = agencyResponse.Item.role?.toLowerCase();
+      console.log('🔍 [applyToAgency] Paso 2: Agencia encontrada, rol:', agencyRole);
       if (agencyRole !== UserRole.AGENCY) {
+        console.log('❌ [applyToAgency] Paso 2: ERROR - El usuario no es una agencia');
         throw new NotFoundException('Agencia no encontrada');
       }
 
+      console.log('🔍 [applyToAgency] Paso 3: Verificando si ya existe una relación...');
+      console.log('🔍 [applyToAgency] Paso 3: Tabla a usar:', {
+        tableName: this.credentials.dynamodb.modelAgencyRelationsTable || '❌ NO CONFIGURADA',
+        desdeCredentials: this.credentials.dynamodb.modelAgencyRelationsTable || '❌ VACIO',
+        desdeProcessEnv: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '❌ NO EN PROCESS.ENV',
+      });
+      // Verificar si ya existe una relación entre este modelo y esta agencia
+      try {
+        const existingRelation = await this.dynamoClient.send(
+          new GetCommand({
+            TableName: this.credentials.dynamodb.modelAgencyRelationsTable,
+            Key: {
+              modelId,
+              agencyId,
+            },
+          }),
+        );
+
+        if (existingRelation.Item) {
+          const existingStatus = existingRelation.Item.status;
+          throw new ConflictException(
+            `Ya existe una relación con esta agencia. Estado actual: ${existingStatus}. ` +
+            `Si deseas actualizar la relación, contacta al soporte o espera a que se procese la solicitud actual.`
+          );
+        }
+      } catch (error: any) {
+        console.log('🔍 [applyToAgency] Paso 3: Error al verificar relación existente:', {
+          errorName: error?.name || 'Unknown',
+          errorCode: error?.code || 'NO_CODE',
+          errorMessage: error?.message || 'No message',
+          isConflictException: error instanceof ConflictException,
+          isResourceNotFound: error?.name === 'ResourceNotFoundException' || error?.code === 'ResourceNotFoundException',
+        });
+        
+        if (error instanceof ConflictException) {
+          console.log('❌ [applyToAgency] Paso 3: ERROR - Relación ya existe');
+          throw error;
+        }
+        // Si es ResourceNotFoundException (tabla no existe), continuar e intentar crear
+        // DynamoDB puede lanzar errores de AWS que no son ConflictException
+        if (error.name === 'ResourceNotFoundException' || error.code === 'ResourceNotFoundException') {
+          console.log('⚠️  [applyToAgency] Paso 3: Tabla no existe aún, continuando...');
+          // Continuar e intentar crear la relación (esto fallará si la tabla no existe)
+        } else if (error.name !== 'ResourceNotFoundException') {
+          console.log('⚠️  [applyToAgency] Paso 3: Otro error, continuando...');
+          // Si es otro error desconocido, continuar e intentar crear
+        }
+        // Continuar con el flujo normal
+      }
+
+      console.log('🔍 [applyToAgency] Paso 4: Verificando que la tabla está configurada...');
+      // Verificar que la tabla está configurada
+      const tableName = this.credentials.dynamodb.modelAgencyRelationsTable;
+      console.log('🔍 [applyToAgency] Paso 4: Verificando tabla:', {
+        tableName: tableName || '❌ VACIO',
+        desdeCredentials: this.credentials.dynamodb.modelAgencyRelationsTable || '❌ NO EN CREDENTIALS',
+        desdeProcessEnv: process.env.DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE || '❌ NO EN PROCESS.ENV',
+        isEmpty: !tableName || tableName.trim() === '',
+        trimLength: tableName?.trim()?.length || 0,
+      });
+      if (!tableName || tableName.trim() === '') {
+        console.log('❌ [applyToAgency] Paso 4: ERROR - Tabla no configurada');
+        console.log('❌ [applyToAgency] Paso 4: Estado de credenciales:', {
+          credentialsObject: JSON.stringify(this.credentials.dynamodb, null, 2),
+        });
+        throw new BadRequestException(
+          'La tabla DynamoDB para relaciones modelo-agencia no está configurada. ' +
+          'Verifica que la variable de entorno DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE esté configurada.'
+        );
+      }
+
+      console.log('🔍 [applyToAgency] Paso 5: Creando relación en tabla:', tableName);
       // Crear relación
       await this.dynamoClient.send(
         new PutCommand({
-          TableName: this.credentials.dynamodb.modelAgencyRelationsTable,
+          TableName: tableName,
           Item: {
             modelId,
             agencyId,
             status: 'pending',
             message,
+            proposedBy: 'model',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           },
         }),
       );
 
+      console.log('✅ [applyToAgency] Paso 5: Relación creada exitosamente');
       return {
         success: true,
         message: 'Postulación enviada exitosamente',
       };
     } catch (error: any) {
-      if (error instanceof NotFoundException) {
+      console.log('❌ [applyToAgency] ERROR CAPTURADO:', {
+        errorName: error?.name || 'Unknown',
+        errorCode: error?.code || 'NO_CODE',
+        errorMessage: error?.message || 'No message',
+        errorStack: error?.stack || 'No stack',
+        isNotFoundException: error instanceof NotFoundException,
+        isConflictException: error instanceof ConflictException,
+        isBadRequestException: error instanceof BadRequestException,
+      });
+      if (error instanceof NotFoundException || error instanceof ConflictException) {
         throw error;
       }
-      throw new BadRequestException(`Error al aplicar a agencia: ${error.message}`);
+      // Mejorar mensaje de error para debugging - capturar errores específicos de DynamoDB
+      const errorName = error.name || error.$metadata?.httpStatusCode || 'Error desconocido';
+      const errorCode = error.code || error.$metadata?.requestId || '';
+      const errorMessage = error.message || 'Error desconocido al aplicar a agencia';
+      const tableName = this.credentials.dynamodb.modelAgencyRelationsTable || 'NO CONFIGURADA';
+      
+      // Detectar errores específicos de DynamoDB
+      if (errorName === 'ResourceNotFoundException' || errorCode === 'ResourceNotFoundException' || errorMessage.includes('does not exist')) {
+        throw new BadRequestException(
+          `La tabla DynamoDB '${tableName}' no existe o no está configurada. ` +
+          `Verifica que la variable de entorno DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE esté configurada y que la tabla exista. ` +
+          `Error: ${errorMessage}`
+        );
+      }
+      
+      if (errorName === 'ValidationException' || errorMessage.includes('validation')) {
+        throw new BadRequestException(
+          `Error de validación: ${errorMessage}. Verifica que los datos enviados sean correctos.`
+        );
+      }
+      
+      const errorDetails = errorCode ? ` (Código: ${errorCode})` : '';
+      throw new BadRequestException(
+        `Error al aplicar a agencia: ${errorMessage}${errorDetails}. ` +
+        `Tipo de error: ${errorName}. ` +
+        `Verifica que la tabla '${tableName}' exista y esté configurada correctamente.`
+      );
     }
   }
 
@@ -770,10 +1205,45 @@ export class UserService {
         throw new NotFoundException('Modelo no encontrado');
       }
 
+      // Verificar si ya existe una relación entre esta agencia y este modelo
+      try {
+        const existingRelation = await this.dynamoClient.send(
+          new GetCommand({
+            TableName: this.credentials.dynamodb.modelAgencyRelationsTable,
+            Key: {
+              modelId,
+              agencyId,
+            },
+          }),
+        );
+
+        if (existingRelation.Item) {
+          const existingStatus = existingRelation.Item.status;
+          throw new ConflictException(
+            `Ya existe una relación con este modelo. Estado actual: ${existingStatus}. ` +
+            `Si deseas actualizar la relación, contacta al soporte o espera a que se procese la solicitud actual.`
+          );
+        }
+      } catch (error: any) {
+        if (error instanceof ConflictException) {
+          throw error;
+        }
+        // Si es otro error (tabla no existe, etc.), continuar e intentar crear
+      }
+
+      // Verificar que la tabla está configurada
+      const tableName = this.credentials.dynamodb.modelAgencyRelationsTable;
+      if (!tableName || tableName.trim() === '') {
+        throw new BadRequestException(
+          'La tabla DynamoDB para relaciones modelo-agencia no está configurada. ' +
+          'Verifica que la variable de entorno DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE esté configurada.'
+        );
+      }
+
       // Crear relación
       await this.dynamoClient.send(
         new PutCommand({
-          TableName: this.credentials.dynamodb.modelAgencyRelationsTable,
+          TableName: tableName,
           Item: {
             modelId,
             agencyId,
@@ -792,10 +1262,36 @@ export class UserService {
         message: 'Propuesta enviada exitosamente',
       };
     } catch (error: any) {
-      if (error instanceof NotFoundException) {
+      if (error instanceof NotFoundException || error instanceof ConflictException) {
         throw error;
       }
-      throw new BadRequestException(`Error al proponer representación: ${error.message}`);
+      // Mejorar mensaje de error para debugging - capturar errores específicos de DynamoDB
+      const errorName = error.name || error.$metadata?.httpStatusCode || 'Error desconocido';
+      const errorCode = error.code || error.$metadata?.requestId || '';
+      const errorMessage = error.message || 'Error desconocido al proponer representación';
+      const tableName = this.credentials.dynamodb.modelAgencyRelationsTable || 'NO CONFIGURADA';
+      
+      // Detectar errores específicos de DynamoDB
+      if (errorName === 'ResourceNotFoundException' || errorCode === 'ResourceNotFoundException' || errorMessage.includes('does not exist')) {
+        throw new BadRequestException(
+          `La tabla DynamoDB '${tableName}' no existe o no está configurada. ` +
+          `Verifica que la variable de entorno DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE esté configurada y que la tabla exista. ` +
+          `Error: ${errorMessage}`
+        );
+      }
+      
+      if (errorName === 'ValidationException' || errorMessage.includes('validation')) {
+        throw new BadRequestException(
+          `Error de validación: ${errorMessage}. Verifica que los datos enviados sean correctos.`
+        );
+      }
+      
+      const errorDetails = errorCode ? ` (Código: ${errorCode})` : '';
+      throw new BadRequestException(
+        `Error al proponer representación: ${errorMessage}${errorDetails}. ` +
+        `Tipo de error: ${errorName}. ` +
+        `Verifica que la tabla '${tableName}' exista y esté configurada correctamente.`
+      );
     }
   }
 
@@ -1166,6 +1662,33 @@ export class UserService {
           totalPages: 0,
         },
       };
+    }
+  }
+
+  /**
+   * Contar modelos gestionados por una agencia (método auxiliar)
+   */
+  private async getAgencyModelsCount(agencyId: string): Promise<number> {
+    try {
+      const response = await this.dynamoClient.send(
+        new QueryCommand({
+          TableName: this.credentials.dynamodb.modelAgencyRelationsTable,
+          IndexName: 'agencyId-status-index',
+          KeyConditionExpression: 'agencyId = :agencyId AND #status = :status',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
+          ExpressionAttributeValues: {
+            ':agencyId': agencyId,
+            ':status': 'active',
+          },
+          Select: 'COUNT',
+        }),
+      );
+      return response.Count || 0;
+    } catch (error: any) {
+      // Si la tabla o índice no existe, retornar 0
+      return 0;
     }
   }
 
@@ -1666,7 +2189,7 @@ export class UserService {
    * REGLAS DE NEGOCIO:
    * - MODEL puede seguir a MODEL, USER y AGENCY
    * - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
-   * - AGENCY no puede seguir (si se implementa en el futuro)
+   * - AGENCY puede seguir a MODEL, USER y AGENCY
    */
   async followModel(userId: string, followedUserId: string, followerRole: string) {
     try {
@@ -1712,8 +2235,13 @@ export class UserService {
         if (followedRole !== 'user' && followedRole !== 'model' && followedRole !== 'agency') {
           throw new BadRequestException(`No puedes seguir a un usuario con rol ${followedRole}`);
         }
+      } else if (actualFollowerRole === 'agency') {
+        // AGENCY puede seguir a MODEL, USER y AGENCY
+        if (followedRole !== 'user' && followedRole !== 'model' && followedRole !== 'agency') {
+          throw new BadRequestException(`No puedes seguir a un usuario con rol ${followedRole}`);
+        }
       } else {
-        // Otros roles no pueden seguir (por ahora)
+        // Otros roles no pueden seguir
         throw new ForbiddenException(`El rol ${actualFollowerRole} no puede seguir usuarios`);
       }
 
@@ -1782,10 +2310,43 @@ export class UserService {
         },
       };
     } catch (error: any) {
+      console.log('❌ [followModel] ERROR CAPTURADO:', {
+        errorName: error?.name || 'Unknown',
+        errorCode: error?.code || 'NO_CODE',
+        errorMessage: error?.message || 'No message',
+        errorStack: error?.stack?.substring(0, 200) || 'No stack',
+        isNotFoundException: error instanceof NotFoundException,
+        isBadRequestException: error instanceof BadRequestException,
+        isForbiddenException: error instanceof ForbiddenException,
+      });
+      
       if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof ForbiddenException) {
         throw error;
       }
-      throw new BadRequestException(`Error al seguir usuario: ${error.message}`);
+      
+      // Mejorar mensaje de error para debugging - capturar errores específicos de DynamoDB
+      const errorName = error.name || error.$metadata?.httpStatusCode || 'Error desconocido';
+      const errorCode = error.code || error.$metadata?.requestId || '';
+      const errorMessage = error.message || 'Error desconocido al seguir usuario';
+      const tableName = this.credentials.dynamodb.userFollowsTable || 'NO CONFIGURADA';
+      
+      // Detectar errores específicos de DynamoDB
+      if (errorName === 'ResourceNotFoundException' || errorCode === 'ResourceNotFoundException' || errorMessage.includes('does not exist')) {
+        throw new BadRequestException(
+          `La tabla DynamoDB '${tableName}' no existe o no está configurada. ` +
+          `Verifica que la variable de entorno DYNAMODB_USER_FOLLOWS_TABLE esté configurada y que la tabla exista. ` +
+          `Error: ${errorMessage}`
+        );
+      }
+      
+      if (errorName === 'ValidationException' || errorMessage.includes('validation')) {
+        throw new BadRequestException(
+          `Error de validación: ${errorMessage}. Verifica que los datos enviados sean correctos.`
+        );
+      }
+      
+      const errorDetails = errorCode ? ` (Código: ${errorCode})` : '';
+      throw new BadRequestException(`Error al seguir usuario: ${errorMessage}${errorDetails}`);
     }
   }
 
@@ -1851,10 +2412,34 @@ export class UserService {
         message: `Dejaste de seguir a este ${followedRole}`,
       };
     } catch (error: any) {
+      console.log('❌ [unfollowModel] ERROR CAPTURADO:', {
+        errorName: error?.name || 'Unknown',
+        errorCode: error?.code || 'NO_CODE',
+        errorMessage: error?.message || 'No message',
+        isNotFoundException: error instanceof NotFoundException,
+      });
+      
       if (error instanceof NotFoundException) {
         throw error;
       }
-      throw new BadRequestException(`Error al dejar de seguir usuario: ${error.message}`);
+      
+      // Mejorar mensaje de error para debugging
+      const errorName = error.name || error.$metadata?.httpStatusCode || 'Error desconocido';
+      const errorCode = error.code || error.$metadata?.requestId || '';
+      const errorMessage = error.message || 'Error desconocido al dejar de seguir usuario';
+      const tableName = this.credentials.dynamodb.userFollowsTable || 'NO CONFIGURADA';
+      
+      // Detectar errores específicos de DynamoDB
+      if (errorName === 'ResourceNotFoundException' || errorCode === 'ResourceNotFoundException' || errorMessage.includes('does not exist')) {
+        throw new BadRequestException(
+          `La tabla DynamoDB '${tableName}' no existe o no está configurada. ` +
+          `Verifica que la variable de entorno DYNAMODB_USER_FOLLOWS_TABLE esté configurada y que la tabla exista. ` +
+          `Error: ${errorMessage}`
+        );
+      }
+      
+      const errorDetails = errorCode ? ` (Código: ${errorCode})` : '';
+      throw new BadRequestException(`Error al dejar de seguir usuario: ${errorMessage}${errorDetails}`);
     }
   }
 
@@ -2226,21 +2811,43 @@ export class UserService {
       }
 
       // Buscar usuarios (solo buyers y modelos públicos)
+      // Buscar por nombre o alias, NO por email
       if (type === 'all' || type === 'users') {
+        // Normalizar query: si viene con @, mantenerlo; si no, buscar en ambos campos
+        const queryNormalized = query.toLowerCase().trim();
+        const queryWithoutAt = queryNormalized.startsWith('@') ? queryNormalized.substring(1) : queryNormalized;
+        
         const usersResponse = await this.dynamoClient.send(
           new ScanCommand({
             TableName: this.credentials.dynamodb.usersTable,
-            FilterExpression: 'contains(fullName, :query) OR contains(email, :query)',
+            // Buscar en fullName o en alias (con o sin @)
+            FilterExpression: 'contains(fullName, :query) OR contains(#alias, :query) OR contains(#alias, :queryWithoutAt)',
+            ExpressionAttributeNames: {
+              '#alias': 'alias',
+            },
             ExpressionAttributeValues: {
               ':query': query,
+              ':queryWithoutAt': queryWithoutAt,
             },
             Limit: limit,
           }),
         );
-        results.users = (usersResponse.Items || []).map((user: any) => ({
+        
+        // Filtrar en memoria también para asegurar normalización case-insensitive
+        const queryLower = query.toLowerCase();
+        results.users = (usersResponse.Items || []).filter((user: any) => {
+          const fullName = ((user.fullName || '') as string).toLowerCase().trim();
+          const alias = ((user.alias || '') as string).toLowerCase().trim();
+          const aliasWithoutAt = alias.startsWith('@') ? alias.substring(1) : alias;
+          const queryNormalized = queryLower.startsWith('@') ? queryLower.substring(1) : queryLower;
+          return fullName.includes(queryNormalized) || 
+                 alias.includes(queryLower) || 
+                 aliasWithoutAt.includes(queryNormalized);
+        }).map((user: any) => ({
           userId: user.id || user.userId,
           fullName: user.fullName,
           email: user.email,
+          alias: user.alias,
           role: user.role,
           avatarUrl: user.avatarUrl,
         }));

@@ -11,9 +11,11 @@ import {
   Request,
   HttpCode,
   HttpStatus,
+  HttpException,
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  ConflictException,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
@@ -39,6 +41,7 @@ import { ApplyAgencyDto, ProposeRepresentationDto, ContactAgencyDto } from './dt
 import { UpdateUserStatusDto, ApproveUserDto, SupportNotesDto } from './dto/admin.dto';
 import { StatsQueryDto } from './dto/stats.dto';
 import { FollowModelDto } from './dto/follow.dto';
+import { UpdateAvailabilityDto } from './dto/availability.dto';
 import { getUserFromToken } from './helpers/auth.helper';
 import {
   ApiResponseDto,
@@ -598,7 +601,7 @@ if (error) {
   async updateMyProfile(
     @Request() req: any,
     @Body() updateDto: UpdateUserDto,
-    @UploadedFile() avatarFile?: Express.Multer.File,
+    @UploadedFile() avatarFile?: any,
   ) {
     const startTime = Date.now();
     let userId: string | undefined;
@@ -609,6 +612,13 @@ if (error) {
       
       if (!userId) {
         throw new ForbiddenException('No se pudo obtener el ID del usuario desde el token.');
+      }
+
+      // Limpiar el campo 'avatar' del body si viene como propiedad (no como archivo)
+      // El campo 'avatar' solo debe venir como archivo en multipart/form-data
+      if (updateDto && 'avatar' in updateDto) {
+        delete (updateDto as any).avatar;
+        this.logger.warn('Campo "avatar" removido del body - debe enviarse como archivo en multipart/form-data', 'updateMyProfile', { userId });
       }
       
       // Si se envió un archivo de avatar, procesarlo primero
@@ -678,6 +688,280 @@ if (error) {
         throw error;
       }
       throw new BadRequestException(`Error al actualizar perfil: ${error.message || 'Error desconocido'}`);
+    }
+  }
+
+  /**
+   * PUT /users/me/availability
+   * Configurar disponibilidad para representación (solo modelos)
+   * 
+   * **CASOS DE USO:**
+   * - Modelo quiere indicar que está disponible para representación de agencias
+   * - Configurar tipos de contrato aceptados (con/sin anticipo)
+   * - Establecer monto de anticipo requerido
+   * - Agregar notas para agencias interesadas
+   */
+  @Put('me/availability')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '⚙️ Configurar disponibilidad para representación (Solo Modelos)',
+    description: `
+**¿Para qué sirve?**
+Permite a un modelo configurar su disponibilidad para representación de agencias, incluyendo tipos de contrato aceptados, anticipo requerido y notas para agencias.
+
+**Casos de uso:**
+- Indicar disponibilidad para representación
+- Configurar tipos de contrato aceptados (con anticipo, sin anticipo)
+- Establecer monto de anticipo requerido (si aplica)
+- Agregar notas o condiciones para agencias
+
+**Restricciones:**
+- Solo usuarios con rol MODEL pueden usar este endpoint
+- Si incluyes "with_advance" en contractTypes, puedes establecer advancePayment
+- Si no incluyes "with_advance", advancePayment será automáticamente null
+
+**Ejemplo de uso:**
+\`\`\`
+PUT /api/v1/users/me/availability
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "available": true,
+  "contractTypes": ["with_advance", "without_advance"],
+  "advancePayment": 1000,
+  "notes": "Solo acepto contratos con mínimo 6 meses de duración"
+}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "availability": {
+      "available": true,
+      "contractTypes": ["with_advance", "without_advance"],
+      "advancePayment": 1000,
+      "notes": "Solo acepto contratos con mínimo 6 meses de duración",
+      "updatedAt": "2024-01-20T15:30:00Z"
+    }
+  },
+  "message": "Disponibilidad actualizada exitosamente"
+}
+\`\`\`
+
+**Notas:**
+- Todos los campos son opcionales, solo actualiza los que envíes
+- Si no existe configuración previa, se crea una nueva
+- Si ya existe, se actualiza solo con los campos proporcionados
+- Los campos no proporcionados mantienen sus valores anteriores
+    `.trim(),
+  })
+  @ApiBody({
+    type: UpdateAvailabilityDto,
+    description: 'Configuración de disponibilidad para representación',
+    examples: {
+      availableOnly: {
+        summary: 'Solo indicar disponibilidad',
+        value: {
+          available: true,
+        },
+      },
+      withContractTypes: {
+        summary: 'Con tipos de contrato',
+        value: {
+          available: true,
+          contractTypes: ['with_advance', 'without_advance'],
+        },
+      },
+      complete: {
+        summary: 'Configuración completa',
+        value: {
+          available: true,
+          contractTypes: ['with_advance', 'without_advance'],
+          advancePayment: 1000,
+          notes: 'Solo acepto contratos con mínimo 6 meses de duración',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Disponibilidad actualizada exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ Datos inválidos - Verificar formato de campos',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo modelos pueden configurar disponibilidad',
+  })
+  async updateAvailability(
+    @Request() req: any,
+    @Body() availabilityDto: UpdateAvailabilityDto,
+  ) {
+    const startTime = Date.now();
+    let userId: string | undefined;
+    
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      userId = userInfo.userId;
+      
+      if (!userId) {
+        throw new ForbiddenException('No se pudo obtener el ID del usuario desde el token.');
+      }
+
+      const result = await this.userService.updateAvailability(userId, availabilityDto);
+
+      // Invalidar caché del perfil
+      const cacheKey = CacheService.getUserProfileCacheKey(userId);
+      await this.cacheService.delete(cacheKey);
+
+      const duration = Date.now() - startTime;
+      this.logger.log('Disponibilidad actualizada exitosamente', 'updateAvailability', { 
+        userId,
+        available: availabilityDto.available,
+        contractTypes: availabilityDto.contractTypes,
+        duration: `${duration}ms`
+      });
+      
+      return result;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      this.logger.error('Error al actualizar disponibilidad', error?.stack, 'updateAvailability', { 
+        userId,
+        error: error.message,
+        duration: `${duration}ms`
+      });
+      
+      if (error.message?.includes('token') || error.message?.includes('autenticación')) {
+        throw new ForbiddenException('Token de autenticación inválido o expirado. Por favor, inicia sesión nuevamente.');
+      }
+      if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al actualizar disponibilidad: ${error.message || 'Error desconocido'}`);
+    }
+  }
+
+  /**
+   * GET /users/me/availability
+   * Obtener configuración de disponibilidad (solo modelos)
+   * 
+   * **CASOS DE USO:**
+   * - Ver configuración actual de disponibilidad
+   * - Cargar datos en el formulario de configuración
+   */
+  @Get('me/availability')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '📋 Obtener mi configuración de disponibilidad (Solo Modelos)',
+    description: `
+**¿Para qué sirve?**
+Obtiene la configuración actual de disponibilidad para representación del modelo autenticado.
+
+**Casos de uso:**
+- Ver configuración actual de disponibilidad
+- Cargar datos en el formulario de configuración
+- Verificar estado de disponibilidad
+
+**Restricciones:**
+- Solo usuarios con rol MODEL pueden usar este endpoint
+
+**Ejemplo de uso:**
+\`\`\`
+GET /api/v1/users/me/availability
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "availability": {
+      "available": true,
+      "contractTypes": ["with_advance", "without_advance"],
+      "advancePayment": 1000,
+      "notes": "Solo acepto contratos con mínimo 6 meses de duración",
+      "updatedAt": "2024-01-20T15:30:00Z"
+    }
+  }
+}
+\`\`\`
+
+**Valores por defecto (si no existe configuración):**
+\`\`\`json
+{
+  "available": false,
+  "contractTypes": [],
+  "advancePayment": null,
+  "notes": null,
+  "updatedAt": null
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Disponibilidad obtenida exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ Solo modelos pueden ver su disponibilidad',
+  })
+  async getAvailability(@Request() req: any) {
+    const startTime = Date.now();
+    let userId: string | undefined;
+    
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      userId = userInfo.userId;
+      
+      if (!userId) {
+        throw new ForbiddenException('No se pudo obtener el ID del usuario desde el token.');
+      }
+
+      const result = await this.userService.getAvailability(userId);
+
+      const duration = Date.now() - startTime;
+      this.logger.log('Disponibilidad obtenida exitosamente', 'getAvailability', { 
+        userId,
+        duration: `${duration}ms`
+      });
+      
+      return result;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      this.logger.error('Error al obtener disponibilidad', error?.stack, 'getAvailability', { 
+        userId,
+        error: error.message,
+        duration: `${duration}ms`
+      });
+      
+      if (error.message?.includes('token') || error.message?.includes('autenticación')) {
+        throw new ForbiddenException('Token de autenticación inválido o expirado. Por favor, inicia sesión nuevamente.');
+      }
+      if (error instanceof ForbiddenException || error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al obtener disponibilidad: ${error.message || 'Error desconocido'}`);
     }
   }
 
@@ -958,12 +1242,15 @@ GET /users/search?q=ana&type=models&page=1&limit=20
    * **IMPORTANTE:** Esta ruta debe estar ANTES de @Get(':id') para evitar conflictos
    * 
    * **CASOS DE USO:**
-   * - Buscar agencias disponibles
+   * - USER: Buscar agencias para conectar con modelos que la agencia tiene (SOLO para ver modelos, NO para negocios)
+   * - MODEL: Buscar agencias para postularse y hacer negocios
+   * - AGENCY: Ver otras agencias para contactar o hacer negocios
    * - Filtrar agencias por país, verificación
-   * - Ver agencias para postularse (modelos)
-   * - Contactar agencias (otras agencias)
    * 
-   * **RESTRICCIÓN:** No disponible para usuarios con rol USER (compradores)
+   * **REGLAS DE NEGOCIO:**
+   * - ✅ USER puede buscar agencias SOLO para conectar con modelos (ver modelos de la agencia)
+   * - ✅ MODEL puede buscar agencias para postularse y hacer negocios
+   * - ✅ AGENCY puede buscar otras agencias para contactar y hacer negocios
    */
   @Get('agencies')
   @UseGuards(AuthGuard)
@@ -986,17 +1273,27 @@ Obtiene una lista paginada de agencias disponibles en el marketplace con filtros
 - ✅ Disponible para modelos, agencias y administradores
 
 **Filtros disponibles:**
-- \`search\`: Búsqueda por texto en nombre o email
-- \`country\`: Código ISO del país
-- \`verified\`: Solo agencias verificadas
-- \`page\`: Número de página
-- \`limit\`: Resultados por página (max 100)
-- \`sortBy\`: Campo para ordenar (createdAt, name)
-- \`order\`: Orden (asc/desc)
+- \`search\`: Búsqueda por texto en nombre, email o bio
+- \`country\`: Código ISO del país (2 letras, ej: AR, US, MX)
+- \`verified\`: Solo agencias verificadas (true/false)
+- \`recommended\`: Solo agencias recomendadas (true/false)
+- \`minRating\`: Rating mínimo de la agencia (0-5)
+- \`minExperience\`: Años de experiencia mínimos de la agencia
+- \`minModels\`: Cantidad mínima de modelos gestionados por la agencia
+- \`page\`: Número de página (default: 1)
+- \`limit\`: Resultados por página (default: 20, max: 100)
+- \`sortBy\`: Campo para ordenar (createdAt, name, reputation, totalSales, rating, experience, totalModels)
+- \`order\`: Orden (asc/desc, default: desc)
 
-**Ejemplo de uso:**
+**Ejemplo de uso básico:**
 \`\`\`
 GET /users/agencies?verified=true&country=AR&sortBy=name&order=asc
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de uso con filtros avanzados:**
+\`\`\`
+GET /users/agencies?recommended=true&minRating=4&minExperience=2&minModels=5&sortBy=rating&order=desc
 Authorization: Bearer {token}
 \`\`\`
 
@@ -1062,16 +1359,48 @@ Authorization: Bearer {token}
   @ApiQuery({
     name: 'sortBy',
     required: false,
-    enum: ['createdAt', 'name'],
-    description: '🔀 Campo para ordenar',
-    example: 'name',
+    enum: ['createdAt', 'reputation', 'totalSales', 'name', 'rating', 'experience', 'totalModels'],
+    description: '🔀 Campo para ordenar (createdAt, reputation, totalSales, name, rating, experience, totalModels)',
+    example: 'rating',
   })
   @ApiQuery({
     name: 'order',
     required: false,
     enum: ['asc', 'desc'],
-    description: '⬆️⬇️ Orden',
-    example: 'asc',
+    description: '⬆️⬇️ Orden (asc/desc, default: desc)',
+    example: 'desc',
+  })
+  @ApiQuery({
+    name: 'recommended',
+    required: false,
+    description: '⭐ Filtrar solo agencias recomendadas',
+    example: true,
+    type: Boolean,
+  })
+  @ApiQuery({
+    name: 'minRating',
+    required: false,
+    description: '⭐ Rating mínimo de la agencia (0-5)',
+    example: 4,
+    type: Number,
+    minimum: 0,
+    maximum: 5,
+  })
+  @ApiQuery({
+    name: 'minExperience',
+    required: false,
+    description: '📅 Años de experiencia mínimos de la agencia',
+    example: 2,
+    type: Number,
+    minimum: 0,
+  })
+  @ApiQuery({
+    name: 'minModels',
+    required: false,
+    description: '👥 Cantidad mínima de modelos gestionados por la agencia',
+    example: 5,
+    type: Number,
+    minimum: 0,
   })
   @ApiResponse({
     status: 200,
@@ -1082,12 +1411,12 @@ Authorization: Bearer {token}
     status: 403,
     description: '❌ No disponible para usuarios con rol USER',
   })
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth('JWT-auth')
   async listAgencies(@Query() query: MarketplaceQueryDto, @Request() req: any) {
-    // Verificar que el usuario no sea USER
+    // REGLA DE NEGOCIO: USER puede buscar agencias SOLO para conectar con modelos que la agencia tiene
+    // No se requiere restricción aquí, USER puede ver el marketplace de agencias
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role === 'USER' || userInfo.role === 'user') {
-      throw new ForbiddenException('Este endpoint no está disponible para usuarios con rol USER (compradores)');
-    }
     const startTime = Date.now();
     
     try {
@@ -1280,8 +1609,9 @@ Permite a un modelo enviar una solicitud de postulación a una agencia para obte
 4. Agencia puede aprobar o rechazar la postulación
 
 **Restricciones:**
-- Solo usuarios con rol MODEL pueden usar este endpoint
+- Solo usuarios con rol MODEL pueden usar este endpoint (comparación case-insensitive)
 - No puedes postularte a la misma agencia dos veces (si ya existe relación pendiente)
+- Los roles se normalizan automáticamente (se eliminan espacios y se convierten a minúsculas)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -1358,11 +1688,48 @@ Content-Type: application/json
     @Body() applyDto: ApplyAgencyDto,
     @Request() req: any,
   ) {
-    const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role !== 'MODEL') {
-      throw new ForbiddenException('Solo modelos pueden postularse a agencias');
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+      if (userRole !== 'model') {
+        throw new ForbiddenException('Solo modelos pueden postularse a agencias');
+      }
+      return this.userService.applyToAgency(userInfo.userId, agencyId, applyDto.message);
+    } catch (error: any) {
+      // Log error para debugging
+      this.logger.error('Error en applyToAgency', error?.stack || 'No stack trace', 'applyToAgency', {
+        agencyId,
+        error: error?.message || 'Error sin mensaje',
+        errorName: error?.name || 'Unknown',
+        errorCode: error?.code || 'NO_CODE',
+        errorType: error?.constructor?.name || 'Unknown',
+        isHttpException: error instanceof HttpException,
+        isBadRequestException: error instanceof BadRequestException,
+        isForbiddenException: error instanceof ForbiddenException,
+        isNotFoundException: error instanceof NotFoundException,
+        isConflictException: error instanceof ConflictException,
+      });
+      
+      // Si es un HttpException (BadRequestException, NotFoundException, ForbiddenException, ConflictException), lanzarlo directamente
+      if (error instanceof HttpException || error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException || error instanceof ConflictException) {
+        throw error;
+      }
+      
+      // Si es un Error pero no HttpException, envolverlo en BadRequestException con mensaje detallado
+      if (error instanceof Error) {
+        const errorMessage = error.message || 'Error desconocido';
+        const errorName = error.name || 'UnknownError';
+        throw new BadRequestException(`Error al aplicar a agencia: ${errorMessage} (${errorName})`);
+      }
+      
+      // Si el error tiene un mensaje pero no es una instancia de Error
+      if (error?.message) {
+        throw new BadRequestException(`Error al aplicar a agencia: ${error.message}`);
+      }
+      
+      // Cualquier otro tipo de error - devolver mensaje útil
+      throw new BadRequestException(`Error al aplicar a agencia. Verifica que los datos sean correctos y que la agencia exista. Error: ${JSON.stringify(error)}`);
     }
-    return this.userService.applyToAgency(userInfo.userId, agencyId, applyDto.message);
   }
 
   /**
@@ -1397,8 +1764,9 @@ Permite a una agencia enviar una propuesta de representación a un modelo.
 4. Modelo puede aceptar o rechazar la propuesta
 
 **Restricciones:**
-- Solo usuarios con rol AGENCY pueden usar este endpoint
+- Solo usuarios con rol AGENCY pueden usar este endpoint (comparación case-insensitive)
 - El modelo debe existir y estar activo
+- Los roles se normalizan automáticamente (se eliminan espacios y se convierten a minúsculas)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -1474,7 +1842,8 @@ Content-Type: application/json
     @Request() req: any,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role !== 'AGENCY') {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (userRole !== 'agency') {
       throw new ForbiddenException('Solo agencias pueden proponer representación');
     }
     return this.userService.proposeRepresentation(userInfo.userId, modelId, proposeDto.message, proposeDto.terms);
@@ -1518,7 +1887,8 @@ Content-Type: application/json
     @Request() req: any,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role !== 'AGENCY') {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (userRole !== 'agency') {
       throw new ForbiddenException('Solo agencias pueden contactar otras agencias');
     }
     // Por ahora solo retornamos éxito, la implementación completa se hará después
@@ -1639,8 +2009,9 @@ Permite a un administrador aprobar manualmente la verificación de un usuario (m
 5. Usuario recibe notificación automática
 
 **Restricciones:**
-- Solo usuarios con rol ADMIN pueden usar este endpoint
+- Solo usuarios con rol ADMIN pueden usar este endpoint (incluye ADMIN_LEVEL_1, ADMIN_LEVEL_2, ADMIN_LEVEL_3)
 - El usuario debe existir y tener verificación pendiente
+- Los roles se normalizan automáticamente (comparación case-insensitive)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -1705,7 +2076,8 @@ Content-Type: application/json
     @Request() req: any,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (!userInfo.role || !userInfo.role.toString().startsWith('ADMIN')) {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (!userRole.startsWith('admin')) {
       throw new ForbiddenException('Solo administradores pueden aprobar usuarios');
     }
     
@@ -1879,14 +2251,16 @@ Authorization: Bearer {token} (opcional)
 Obtiene el perfil detallado de una agencia específica con información extendida.
 
 **Casos de uso:**
-- Modelos buscando agencias para postularse
-- Ver información de agencia antes de contactar
-- Ver modelos gestionados por la agencia (si aplica)
-- Analizar agencia para partnership o negociación
+- **USER**: Ver información de agencia para conectar con modelos que la agencia tiene (SOLO para ver modelos, NO para negocios)
+- **MODEL**: Buscar agencias para postularse y hacer negocios de representación
+- **AGENCY**: Ver información de otra agencia para contactar y hacer negocios
+- Ver modelos gestionados por la agencia (disponible para todos los roles autenticados)
 
-**Restricciones:**
-- ❌ No disponible para usuarios con rol USER (compradores)
-- ✅ Disponible para modelos, agencias y administradores
+**Reglas de negocio:**
+- ✅ **USER (compradores)**: Puede ver perfil de agencia SOLO para conectar con modelos (ver perfiles de modelos de la agencia)
+- ✅ **MODEL**: Puede ver perfil de agencia para postularse y hacer negocios
+- ✅ **AGENCY**: Puede ver perfil de otra agencia para contactar y hacer negocios
+- ✅ **ADMIN**: Acceso completo con estadísticas
 
 **Información incluida:**
 - Datos básicos: nombre, email, bio, avatar
@@ -1957,11 +2331,9 @@ Authorization: Bearer {token}
     @Param('id') agencyId: string,
     @Request() req: any,
   ) {
-    // Verificar que el usuario no sea USER
+    // REGLA DE NEGOCIO: USER puede ver perfil de agencia SOLO para conectar con modelos que la agencia tiene
+    // No se requiere restricción aquí, USER puede ver el perfil público de la agencia
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role === 'USER' || userInfo.role === 'user') {
-      throw new ForbiddenException('Este endpoint no está disponible para usuarios con rol USER (compradores)');
-    }
     
     const requesterRole = userInfo.role as UserRole;
 
@@ -2001,9 +2373,10 @@ Obtiene la lista de usuarios que han comprado contenido al modelo autenticado.
 - Fecha de primera compra
 
 **Restricciones:**
-- Solo usuarios con rol MODEL pueden usar este endpoint
+- Solo usuarios con rol MODEL pueden usar este endpoint (comparación case-insensitive)
 - Los compradores se obtienen de las relaciones usuario-modelo
 - Resultados paginados para mejor performance
+- Los roles se normalizan automáticamente (se eliminan espacios y se convierten a minúsculas)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -2075,7 +2448,8 @@ Authorization: Bearer {token}
     @Query('limit') limit?: string,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role !== 'MODEL') {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (userRole !== 'model') {
       throw new ForbiddenException('Solo modelos pueden ver sus compradores');
     }
 
@@ -2120,9 +2494,10 @@ Obtiene la lista de modelos que están bajo representación de la agencia autent
 - Fecha de incorporación
 
 **Restricciones:**
-- Solo usuarios con rol AGENCY pueden usar este endpoint
+- Solo usuarios con rol AGENCY pueden usar este endpoint (comparación case-insensitive)
 - Solo muestra modelos con relación activa (status: 'active')
 - Resultados paginados
+- Los roles se normalizan automáticamente (se eliminan espacios y se convierten a minúsculas)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -2197,7 +2572,8 @@ Authorization: Bearer {token}
     @Query('limit') limit?: string,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (userInfo.role !== 'AGENCY') {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (userRole !== 'agency') {
       throw new ForbiddenException('Solo agencias pueden ver sus modelos');
     }
 
@@ -2236,8 +2612,9 @@ Obtiene estadísticas completas del usuario autenticado como comprador (rol USER
 - Implementar sección de estadísticas en perfil
 
 **Restricciones:**
-- Solo disponible para usuarios con rol USER
+- Solo disponible para usuarios con rol USER (comparación case-insensitive)
 - Requiere autenticación
+- Los roles se normalizan automáticamente (se eliminan espacios y se convierten a minúsculas)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -2271,8 +2648,9 @@ Authorization: Bearer {token}
   })
   async getBuyerStats(@Request() req: any) {
     const userInfo = await getUserFromToken(req.token);
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
     
-    if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+    if (userRole !== 'user') {
       throw new ForbiddenException('Solo usuarios con rol USER pueden ver estas estadísticas');
     }
 
@@ -2339,9 +2717,10 @@ Authorization: Bearer {admin_token}
 \`\`\`
 
 **Restricciones:**
-- Solo usuarios con rol ADMIN pueden acceder
+- Solo usuarios con rol ADMIN pueden acceder (incluye ADMIN_LEVEL_1, ADMIN_LEVEL_2, ADMIN_LEVEL_3)
 - Las métricas se calculan en tiempo real
 - Algunas métricas pueden requerir consultas a múltiples tablas
+- Los roles se normalizan automáticamente (comparación case-insensitive)
 
 **Notas:**
 - Las métricas se actualizan automáticamente
@@ -2369,8 +2748,9 @@ Authorization: Bearer {admin_token}
     try {
       const userInfo = await getUserFromToken(req.token);
       userId = userInfo.userId;
+      const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
       
-      if (!userInfo.role || !userInfo.role.toString().startsWith('ADMIN')) {
+      if (!userRole.startsWith('admin')) {
         throw new ForbiddenException('Solo administradores pueden ver estadísticas');
       }
 
@@ -2445,7 +2825,8 @@ Authorization: Bearer {admin_token}
     @Request() req: any,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    if (!userInfo.role || !userInfo.role.toString().startsWith('ADMIN')) {
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (!userRole.startsWith('admin')) {
       throw new ForbiddenException('Solo administradores pueden verificar pagos');
     }
 
@@ -2486,9 +2867,9 @@ Authorization: Bearer {admin_token}
     @Request() req: any,
   ) {
     const userInfo = await getUserFromToken(req.token);
-    const role = userInfo.role?.toString() || '';
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
     
-    if (!role.startsWith('ADMIN') && role !== 'SUPPORT') {
+    if (!userRole.startsWith('admin') && userRole !== 'support') {
       throw new ForbiddenException('Solo support o admins pueden agregar notas');
     }
 
@@ -2502,6 +2883,7 @@ Authorization: Bearer {admin_token}
    * **REGLAS DE NEGOCIO:**
    * - MODEL puede seguir a MODEL, USER y AGENCY
    * - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
+   * - AGENCY puede seguir a MODEL, USER y AGENCY
    * 
    * **CASOS DE USO:**
    * - Usuario quiere seguir a otro usuario/modelo para ver su contenido
@@ -2521,13 +2903,15 @@ Permite seguir a otros usuarios (MODEL, USER o AGENCY) según las reglas de nego
 **REGLAS DE NEGOCIO:**
 - **MODEL** puede seguir a: MODEL, USER y AGENCY
 - **USER** puede seguir a: USER y MODEL (NO puede seguir AGENCY)
+- **AGENCY** puede seguir a: MODEL, USER y AGENCY
 
 **Casos de uso:**
 - Seguir usuarios/modelos para ver sus posts en el feed
 - Mantener lista de usuarios favoritos
 - Recibir notificaciones de nuevos posts
-- Modelos pueden seguir a otros modelos o usuarios
-- Usuarios pueden seguir a otros usuarios o modelos
+- Modelos pueden seguir a otros modelos, usuarios y agencias
+- Usuarios pueden seguir a otros usuarios y modelos (NO pueden seguir agencias)
+- Agencias pueden seguir modelos, usuarios y otras agencias para monitorear contenido y competencia
 
 **Restricciones:**
 - No puedes seguirte a ti mismo
@@ -2542,7 +2926,7 @@ Authorization: Bearer {token}
 
 **Ejemplos de respuesta:**
 
-**Caso 1: Seguir a un modelo (desde USER o MODEL)**
+**Caso 1: Seguir a un modelo (desde USER, MODEL o AGENCY)**
 \`\`\`json
 {
   "success": true,
@@ -2556,7 +2940,7 @@ Authorization: Bearer {token}
 }
 \`\`\`
 
-**Caso 2: Seguir a un usuario (desde USER o MODEL)**
+**Caso 2: Seguir a un usuario (desde USER, MODEL o AGENCY)**
 \`\`\`json
 {
   "success": true,
@@ -2570,7 +2954,7 @@ Authorization: Bearer {token}
 }
 \`\`\`
 
-**Caso 3: Seguir a una agencia (solo desde MODEL)**
+**Caso 3: Seguir a una agencia (desde MODEL o AGENCY)**
 \`\`\`json
 {
   "success": true,
@@ -2620,22 +3004,36 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 403,
-    description: '❌ Restricción de rol: USER no puede seguir AGENCY, o tu rol no puede seguir usuarios',
+    description: '❌ Restricción de rol: USER no puede seguir AGENCY',
   })
   @ApiResponse({
     status: 404,
     description: '❌ Usuario a seguir no encontrado',
   })
   async followModel(@Param('modelId') modelId: string, @Request() req: any) {
-    const userInfo = await getUserFromToken(req.token);
-    
-    // Validar que el usuario tenga un rol válido para seguir
-    const userRole = userInfo.role?.toLowerCase();
-    if (userRole !== 'user' && userRole !== 'model') {
-      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden seguir otros usuarios');
-    }
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      
+      // Validar que el usuario tenga un rol válido para seguir
+      const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+      if (userRole !== 'user' && userRole !== 'model' && userRole !== 'agency') {
+        throw new ForbiddenException('Solo usuarios con rol USER, MODEL o AGENCY pueden seguir otros usuarios');
+      }
 
-    return this.userService.followModel(userInfo.userId, modelId, userInfo.role);
+      return this.userService.followModel(userInfo.userId, modelId, userInfo.role);
+    } catch (error: any) {
+      this.logger.error('Error en followModel', error?.stack, 'followModel', {
+        modelId,
+        error: error?.message || 'Error sin mensaje',
+        errorName: error?.name || 'Unknown',
+      });
+      
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
+      throw new BadRequestException(`Error al seguir usuario: ${error.message || 'Error desconocido'}`);
+    }
   }
 
   /**
@@ -2658,7 +3056,7 @@ Permite dejar de seguir a un usuario (MODEL, USER o AGENCY) que estabas siguiend
 - Limpiar tu lista de seguidos
 
 **Restricciones:**
-- Solo usuarios con rol USER o MODEL pueden dejar de seguir
+- Solo usuarios con rol USER, MODEL o AGENCY pueden dejar de seguir
 - Debes estar siguiendo al usuario para poder dejar de seguirlo
 
 **Ejemplo de uso:**
@@ -2693,21 +3091,35 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 403,
-    description: '❌ Solo usuarios con rol USER o MODEL pueden dejar de seguir',
+    description: '❌ Solo usuarios con rol USER, MODEL o AGENCY pueden dejar de seguir',
   })
   @ApiResponse({
     status: 404,
     description: '❌ No estás siguiendo a este usuario',
   })
   async unfollowModel(@Param('modelId') modelId: string, @Request() req: any) {
-    const userInfo = await getUserFromToken(req.token);
-    
-    const userRole = userInfo.role?.toLowerCase();
-    if (userRole !== 'user' && userRole !== 'model') {
-      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden dejar de seguir usuarios');
-    }
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      
+      const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+      if (userRole !== 'user' && userRole !== 'model' && userRole !== 'agency') {
+        throw new ForbiddenException('Solo usuarios con rol USER, MODEL o AGENCY pueden dejar de seguir usuarios');
+      }
 
-    return this.userService.unfollowModel(userInfo.userId, modelId);
+      return this.userService.unfollowModel(userInfo.userId, modelId);
+    } catch (error: any) {
+      this.logger.error('Error en unfollowModel', error?.stack, 'unfollowModel', {
+        modelId,
+        error: error?.message || 'Error sin mensaje',
+        errorName: error?.name || 'Unknown',
+      });
+      
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
+      throw new BadRequestException(`Error al dejar de seguir usuario: ${error.message || 'Error desconocido'}`);
+    }
   }
 
   /**
@@ -2727,6 +3139,7 @@ Retorna la lista paginada de usuarios (MODEL, USER o AGENCY) que el usuario aute
 **REGLAS DE NEGOCIO:**
 - **MODEL** puede seguir a: MODEL, USER y AGENCY
 - **USER** puede seguir a: USER y MODEL (NO puede seguir AGENCY)
+- **AGENCY** puede seguir a: MODEL, USER y AGENCY
 
 **Casos de uso:**
 - Ver lista de usuarios/modelos/agencias que sigues
@@ -2792,7 +3205,7 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 403,
-    description: '❌ Solo usuarios con rol USER o MODEL pueden ver sus seguidos',
+    description: '❌ Solo usuarios con rol USER, MODEL o AGENCY pueden ver sus seguidos',
   })
   async getFollowing(
     @Request() req: any,
@@ -2801,9 +3214,9 @@ Authorization: Bearer {token}
   ) {
     const userInfo = await getUserFromToken(req.token);
     
-    const userRole = userInfo.role?.toLowerCase();
-    if (userRole !== 'user' && userRole !== 'model') {
-      throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden ver sus seguidos');
+    const userRole = userInfo.role?.toString().trim().toLowerCase() || '';
+    if (userRole !== 'user' && userRole !== 'model' && userRole !== 'agency') {
+      throw new ForbiddenException('Solo usuarios con rol USER, MODEL o AGENCY pueden ver sus seguidos');
     }
 
     return this.userService.getFollowing(

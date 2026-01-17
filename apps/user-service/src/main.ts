@@ -23,6 +23,7 @@ async function bootstrap() {
     enableSwagger: true,
     swaggerConfig: {
       title: 'BRAVAS User Service API',
+      globalPrefix: 'api/v1',
       description: `
 # 📚 Documentación Completa - User Service
 
@@ -39,6 +40,7 @@ El **User Service** es el servicio central de gestión de usuarios de la platafo
 - ✅ **Sistema de seguimiento (Follow)** con reglas de negocio:
   - MODEL puede seguir a MODEL, USER y AGENCY
   - USER puede seguir a USER y MODEL (NO puede seguir AGENCY)
+  - AGENCY puede seguir a MODEL, USER y AGENCY
 - ✅ Administración y moderación
 
 ## 🔐 Autenticación
@@ -54,8 +56,15 @@ Authorization: Bearer {jwt_token}
 - **USER**: Usuario normal, puede ver perfiles públicos y gestionar su propio perfil
 - **MODEL**: Modelo, puede ver estadísticas, compradores, postularse a agencias
 - **AGENCY**: Agencia, puede gestionar modelos, proponer representación
-- **ADMIN**: Administrador, acceso completo a todos los endpoints
+- **ADMIN**: Administrador, acceso completo a todos los endpoints (incluye ADMIN_LEVEL_1, ADMIN_LEVEL_2, ADMIN_LEVEL_3)
 - **SUPPORT**: Soporte, puede agregar notas a usuarios
+
+### ⚙️ Normalización de Roles
+
+**Importante**: Todas las comparaciones de roles son **case-insensitive** y normalizadas automáticamente:
+- Los roles se comparan sin importar mayúsculas/minúsculas (user, USER, User son equivalentes)
+- Se eliminan espacios en blanco automáticamente
+- Esto garantiza compatibilidad con diferentes formatos de tokens JWT
 
 ## 🚀 Características Principales
 
@@ -74,13 +83,14 @@ Authorization: Bearer {jwt_token}
 ### 🔒 Seguridad
 - Validación de datos automática
 - Rate limiting
-- Permisos basados en roles
+- Permisos basados en roles (normalizados y case-insensitive)
 - Almacenamiento seguro en S3
+- Normalización automática de roles para evitar problemas de compatibilidad
 
 ## 📖 Guía de Uso
 
 Para más detalles sobre cada endpoint, consulta la documentación completa en:
-\`SWAGGER-DOCUMENTACION-COMPLETA.md\`
+SWAGGER-DOCUMENTACION-COMPLETA.md
 
 ## 🆘 Soporte
 
@@ -93,14 +103,25 @@ Para problemas o preguntas, contacta al equipo de desarrollo.
     },
   });
 
-  const nestApp = await app.createApp();
-  
-  // Solo escuchar en desarrollo local
-  if (process.env.NODE_ENV !== 'production') {
-    const port = process.env.PORT || 3001; // Puerto diferente para no conflictuar con auth
-    await nestApp.listen(port);
-    console.log(`🚀 User Service running on: http://localhost:${port}/api/v1`);
-    console.log(`📚 API Documentation: http://localhost:${port}/api-docs`);
+  try {
+    console.log('🔄 Creando aplicación NestJS...');
+    const nestApp = await app.createApp();
+    console.log('✅ Aplicación NestJS creada exitosamente');
+    
+    // Solo escuchar en desarrollo local
+    if (process.env.NODE_ENV !== 'production') {
+      const port = process.env.PORT || 3001; // Puerto diferente para no conflictuar con auth
+      console.log(`🔌 Iniciando servidor en puerto ${port}...`);
+      await nestApp.listen(port);
+      console.log(`🚀 User Service running on: http://localhost:${port}/api/v1`);
+      console.log(`📚 API Documentation: http://localhost:${port}/api-docs`);
+    }
+  } catch (error) {
+    console.error('❌ Error al iniciar la aplicación:', error);
+    if (error instanceof Error) {
+      console.error('Stack trace:', error.stack);
+    }
+    process.exit(1);
   }
 }
 
