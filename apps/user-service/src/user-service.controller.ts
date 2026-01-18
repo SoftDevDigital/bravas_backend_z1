@@ -113,7 +113,8 @@ Obtiene el perfil completo del usuario autenticado, incluyendo información bás
 
 **Información incluida:**
 - Datos básicos: email, nombre, rol, estado
-- Perfil extendido: bio, avatar, país, fecha de nacimiento
+- **avatarUrl**: URL del avatar (en el nivel principal, NO en profile)
+- Perfil extendido: bio, país, fecha de nacimiento (dentro de profile)
 - Preferencias: configuraciones personalizadas
 - Estado: verificación, estado de cuenta
 
@@ -127,12 +128,21 @@ Obtiene el perfil completo del usuario autenticado, incluyendo información bás
     "fullName": "Juan Pérez",
     "role": "MODEL",
     "verified": true,
-    "avatarUrl": "https://cdn.bravas.com/avatars/user123.jpg",
+    "avatarUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/medium-1234567890.jpg",
     "bio": "Modelo profesional...",
-    "profile": { ... }
+    "country": "AR",
+    "birthDate": "1990-01-01",
+    "profile": {
+      "bio": "Modelo profesional...",
+      "country": "AR",
+      "birthDate": "1990-01-01"
+      // NOTA: avatarUrl NO está aquí (solo en nivel principal)
+    }
   }
 }
 \`\`\`
+
+**⚠️ IMPORTANTE**: El campo avatarUrl está solo en el nivel principal (data.avatarUrl), NO dentro de profile. Esto evita duplicación de datos.
     `.trim(),
   })
   @ApiResponse({
@@ -492,16 +502,23 @@ if (error) {
     "email": "user@example.com",
     "fullName": "Juan Pérez",
     "bio": "Nueva biografía profesional",
-    "avatarUrl": "https://cdn.bravas.com/avatars/user123/medium-1234567890.jpg",
+    "avatarUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/medium-1234567890.jpg",
     "country": "AR",
     "preferences": {
       "theme": "dark",
       "language": "es",
       "notifications": true
+    },
+    "profile": {
+      "bio": "Nueva biografía profesional",
+      "country": "AR"
+      // NOTA: avatarUrl NO está en profile (solo en nivel principal)
     }
   }
 }
 \`\`\`
+
+**⚠️ IMPORTANTE**: El campo avatarUrl se guarda solo en el nivel principal (data.avatarUrl), NO dentro de profile. Esto evita duplicación de datos.
     `.trim(),
   })
   @ApiBody({
@@ -536,8 +553,8 @@ if (error) {
         },
         avatarUrl: {
           type: 'string',
-          description: 'URL del avatar (alternativa a subir archivo). Usar cuando se envía JSON.',
-          example: 'https://cdn.bravas.com/avatars/user123.jpg',
+          description: 'URL del avatar (alternativa a subir archivo). Usar cuando se envía JSON. El avatar se guarda solo en el nivel principal del perfil (data.avatarUrl), no en profile.',
+          example: 'https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/medium-1234567890.jpg',
         },
         preferences: {
           type: 'object',
@@ -1156,6 +1173,8 @@ GET /users/models?sortBy=totalSales&order=desc&limit=50
    * Búsqueda global (modelos, packs, usuarios)
    */
   @Get('search')
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: '🔍 Búsqueda global',

@@ -110,16 +110,18 @@ file: [archivo de imagen]
 \`\`\`json
 {
   "success": true,
-  "avatarUrl": "https://cdn.bravas.com/avatars/user123/medium-1234567890.jpg",
-  "thumbnailUrl": "https://cdn.bravas.com/avatars/user123/thumbnail-1234567890.jpg",
+  "avatarUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/medium-1234567890.jpg",
+  "thumbnailUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/thumbnail-1234567890.jpg",
   "sizes": {
-    "thumbnail": "https://cdn.bravas.com/avatars/user123/thumbnail-1234567890.jpg",
-    "small": "https://cdn.bravas.com/avatars/user123/small-1234567890.jpg",
-    "medium": "https://cdn.bravas.com/avatars/user123/medium-1234567890.jpg",
-    "large": "https://cdn.bravas.com/avatars/user123/large-1234567890.jpg"
+    "thumbnail": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/thumbnail-1234567890.jpg",
+    "small": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/small-1234567890.jpg",
+    "medium": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/medium-1234567890.jpg",
+    "large": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/userId/large-1234567890.jpg"
   }
 }
 \`\`\`
+
+**Nota:** El avatar se guarda automáticamente en el perfil del usuario (campo avatarUrl en el nivel principal del perfil).
 
 **Validaciones:**
 - ✅ Tipo de archivo: JPEG, PNG o WebP
