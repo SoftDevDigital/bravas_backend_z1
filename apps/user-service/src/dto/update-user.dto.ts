@@ -1,7 +1,7 @@
 import { IsOptional, IsString, IsDateString, IsEnum, IsObject, IsEmail, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '@bravas/shared';
-import { Transform } from 'class-transformer';
+import { Transform, Exclude } from 'class-transformer';
 
 /**
  * DTO para actualizar perfil de usuario
@@ -21,6 +21,27 @@ export class UpdateUserDto {
   @Matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s'-]+$/, { message: 'El nombre solo puede contener letras, espacios, guiones y apostrofes' })
   @Transform(({ value }) => value?.trim())
   fullName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Alias único del usuario (formato @ejemplo)',
+    example: '@juan_perez',
+    minLength: 2,
+    maxLength: 30,
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(2, { message: 'El alias debe tener al menos 2 caracteres' })
+  @MaxLength(30, { message: 'El alias no puede exceder 30 caracteres' })
+  @Matches(/^@[a-zA-Z0-9_]+$/, { message: 'El alias debe comenzar con @ y solo puede contener letras, números y guiones bajos (ej: @juan_perez)' })
+  @Transform(({ value }) => {
+    // Normalizar: asegurar que empiece con @ y en minúsculas
+    if (value) {
+      const trimmed = value.trim().toLowerCase();
+      return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+    }
+    return value;
+  })
+  alias?: string;
 
   @ApiPropertyOptional({
     description: 'Código de país ISO (2 letras)',
@@ -72,12 +93,50 @@ export class UpdateUserDto {
   avatarUrl?: string;
 
   @ApiPropertyOptional({
-    description: 'Preferencias del usuario (objeto JSON)',
-    example: { theme: 'dark', language: 'es' },
+    description: 'Preferencias del usuario (objeto JSON). En multipart/form-data debe enviarse como string JSON.',
+    example: {
+      theme: 'dark',
+      language: 'es',
+      notifications: {
+        messages: true,
+        contracts: true,
+        transfers: true,
+        payments: true,
+        general: true,
+      },
+    },
   })
   @IsOptional()
-  @IsObject()
-  preferences?: Record<string, any>;
+  @Transform(({ value }) => {
+    // Si viene como string (multipart/form-data), parsearlo a objeto
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        // Si no es JSON válido, retornar el valor original para que falle la validación
+        return value;
+      }
+    }
+    // Si ya es un objeto, retornarlo tal cual
+    return value;
+  })
+  @IsObject({ message: 'preferences must be an object' })
+  preferences?: {
+    theme?: 'light' | 'dark' | 'auto';
+    language?: string;
+    notifications?: {
+      messages?: boolean;
+      contracts?: boolean;
+      transfers?: boolean;
+      payments?: boolean;
+      general?: boolean;
+    };
+    [key: string]: any; // Permitir otras preferencias
+  };
+
+  // Nota: El campo 'avatar' NO debe estar aquí como propiedad del DTO
+  // Solo debe venir como archivo en multipart/form-data usando @UploadedFile()
+  // El ValidationPipe con whitelist: true eliminará automáticamente cualquier campo 'avatar' del body
 
   // Campos específicos por rol se agregarán según necesidades
 }

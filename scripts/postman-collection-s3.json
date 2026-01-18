@@ -1,0 +1,162 @@
+{
+  "info": {
+    "name": "BRAVAS - S3 Endpoints",
+    "description": "Colección para probar endpoints que usan S3 (avatars y contenido)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "POST /users/me/avatar",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": [],
+              "description": "Archivo de imagen (JPEG, PNG, WebP, máximo 5MB)"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/users/me/avatar",
+          "host": ["{{baseUrl}}"],
+          "path": ["users", "me", "avatar"]
+        },
+        "description": "Sube un avatar del usuario. Genera 4 tamaños automáticamente."
+      },
+      "response": []
+    },
+    {
+      "name": "PUT /users/me (con avatar)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "avatar",
+              "type": "file",
+              "src": [],
+              "description": "Archivo de imagen para avatar"
+            },
+            {
+              "key": "fullName",
+              "value": "Mi Nombre",
+              "type": "text",
+              "description": "Nombre completo (opcional)"
+            },
+            {
+              "key": "bio",
+              "value": "Mi biografía",
+              "type": "text",
+              "description": "Biografía (opcional)"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/users/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["users", "me"]
+        },
+        "description": "Actualiza el perfil del usuario incluyendo avatar"
+      },
+      "response": []
+    },
+    {
+      "name": "POST /content/posts/upload",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "image",
+              "type": "file",
+              "src": [],
+              "description": "Archivo de imagen para post (JPEG, PNG, WebP, GIF, máximo 10MB)"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/content/posts/upload",
+          "host": ["{{baseUrl}}"],
+          "path": ["content", "posts", "upload"]
+        },
+        "description": "Sube una imagen a S3 para usar en un post"
+      },
+      "response": []
+    },
+    {
+      "name": "GET - Verificar imagen (avatar)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{avatarUrl}}",
+          "host": ["{{avatarUrl}}"]
+        },
+        "description": "Verifica que la imagen del avatar es accesible públicamente"
+      },
+      "response": []
+    },
+    {
+      "name": "GET - Verificar imagen (contenido)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{contentImageUrl}}",
+          "host": ["{{contentImageUrl}}"]
+        },
+        "description": "Verifica que la imagen de contenido es accesible públicamente"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "TU_TOKEN_AQUI",
+      "type": "string"
+    },
+    {
+      "key": "avatarUrl",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "contentImageUrl",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

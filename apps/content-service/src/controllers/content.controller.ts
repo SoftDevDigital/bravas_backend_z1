@@ -153,44 +153,98 @@ export class ContentController {
   /**
    * GET /content/posts
    * Listar posts (feed o de un usuario)
-   * Para usuarios USER: retorna feed personalizado (modelos seguidos)
-   * Para otros roles: retorna feed global o posts de usuario específico
+   * Para usuarios USER y MODEL: si no especifican userId, retorna feed personalizado (usuarios seguidos)
+   * Si especifican userId o son AGENCY: retorna feed global o posts de usuario específico
+   * Query param 'type=following' fuerza el feed personalizado incluso si se especifica userId
    */
   @Get('posts')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Listar posts',
+    summary: '📱 Listar posts (Feed personalizado o global)',
     description: `
-Lista posts según el rol del usuario:
-- **USER (comprador):** Feed personalizado con posts de modelos seguidos
-- **MODEL/AGENCY:** Feed global o posts de un usuario específico
+**¿Para qué sirve?**
+Lista posts según el rol del usuario y parámetros de consulta.
+
+**Comportamiento por rol:**
+- **USER (comprador):**
+  - Sin \`userId\` y sin \`type\`: Feed personalizado (posts de usuarios seguidos: USER y MODEL)
+  - Con \`userId\`: Posts del usuario específico
+  - Con \`type=following\`: Feed personalizado (fuerza feed personalizado)
+  - Con \`type=global\`: Feed global (todos los posts activos)
+
+- **MODEL (modelo):**
+  - Sin \`userId\` y sin \`type\`: Feed personalizado (posts de usuarios seguidos: MODEL, USER y AGENCY)
+  - Con \`userId\`: Posts del usuario específico
+  - Con \`type=following\`: Feed personalizado (fuerza feed personalizado)
+  - Con \`type=global\`: Feed global (todos los posts activos)
+
+- **AGENCY:**
+  - Sin \`userId\`: Feed global (todos los posts activos)
+  - Con \`userId\`: Posts del usuario específico
+
+**Reglas de seguimiento:**
+- **MODEL** puede seguir a: MODEL, USER y AGENCY
+- **USER** puede seguir a: USER y MODEL (NO puede seguir AGENCY)
 
 **Query params:**
-- \`userId\`: ID del usuario para filtrar posts (solo para MODEL/AGENCY)
-- \`limit\`: Límite de resultados (default: 20)
-- \`cursor\`: Cursor para paginación
+- \`userId\`: ID del usuario para filtrar posts de un usuario específico (opcional)
+- \`type\`: Tipo de feed - 'following' para feed personalizado, 'global' para feed global (opcional)
+  - Si no se especifica y eres USER/MODEL sin \`userId\`, por defecto es 'following'
+  - Si no se especifica y eres AGENCY o especificas \`userId\`, se usa feed global/posts del usuario
+- \`limit\`: Límite de resultados (default: 20, máximo: 100)
+- \`cursor\`: Cursor para paginación (obtener más resultados)
+
+**Ejemplos:**
+- \`GET /content/posts\` - Feed personalizado (USER/MODEL) o global (AGENCY)
+- \`GET /content/posts?type=following\` - Feed personalizado forzado (solo USER/MODEL)
+- \`GET /content/posts?type=global\` - Feed global (todos los posts activos)
+- \`GET /content/posts?userId=model_123\` - Posts del modelo específico
+- \`GET /content/posts?type=following&limit=50&cursor=xyz\` - Feed personalizado paginado
     `.trim(),
   })
-  @ApiQuery({ name: 'userId', required: false, description: 'ID del usuario para filtrar posts (solo para MODEL/AGENCY)' })
-  @ApiQuery({ name: 'limit', required: false, description: 'Límite de resultados (default: 20)' })
-  @ApiQuery({ name: 'cursor', required: false, description: 'Cursor para paginación' })
+  @ApiQuery({ 
+    name: 'userId', 
+    required: false, 
+    description: 'ID del usuario para filtrar posts de un usuario específico (opcional)' 
+  })
+  @ApiQuery({ 
+    name: 'type', 
+    required: false, 
+    enum: ['following', 'global'], 
+    description: 'Tipo de feed: following (personalizado - solo USER/MODEL) o global (todos los posts). Si no se especifica y eres USER/MODEL sin userId, por defecto es following.' 
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    description: 'Límite de resultados (default: 20, máximo: 100)',
+    type: Number,
+    example: 20,
+  })
+  @ApiQuery({ 
+    name: 'cursor', 
+    required: false, 
+    description: 'Cursor para paginación (obtener más resultados después del último post)',
+    example: 'eyJsYXN0S2V5IjoicG9zdF8xMjMifQ==',
+  })
   @ApiResponse({
     status: 200,
-    description: 'Lista de posts obtenida exitosamente',
+    description: '✅ Lista de posts obtenida exitosamente',
     type: ApiResponseDto,
   })
   async listPosts(
     @Request() req: any,
     @Query('userId') userId?: string,
+    @Query('type') type?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
   ) {
     try {
       const userInfo = await getUserFromToken(req.token);
       const limitNum = limit ? parseInt(limit, 10) : 20;
+      const feedType = type?.toLowerCase();
 
-      // Si es USER y no especificó userId, mostrar feed personalizado
-      if ((userInfo.role === 'USER' || userInfo.role === 'user') && !userId) {
+      // Si se especifica type=following, forzar feed personalizado
+      if (feedType === 'following') {
         const result = await this.contentService.getPersonalizedFeed(userInfo.userId, limitNum, cursor);
         return {
           success: true,
@@ -204,13 +258,31 @@ Lista posts según el rol del usuario:
         };
       }
 
-      // Para otros roles o si especificó userId, usar el método normal
+      // Si es USER o MODEL y no especificó userId ni type, mostrar feed personalizado
+      const isUserOrModel = (userInfo.role === 'USER' || userInfo.role === 'user' || 
+                            userInfo.role === 'MODEL' || userInfo.role === 'model');
+      
+      if (isUserOrModel && !userId && feedType !== 'global') {
+        const result = await this.contentService.getPersonalizedFeed(userInfo.userId, limitNum, cursor);
+        return {
+          success: true,
+          data: result.posts.map(p => this.contentService.mapPostToDto(p)),
+          message: 'Feed personalizado obtenido exitosamente',
+          pagination: {
+            limit: limitNum,
+            hasMore: !!result.nextCursor,
+            cursor: result.nextCursor,
+          },
+        };
+      }
+
+      // Para otros casos: feed global o posts de usuario específico
       const result = await this.contentService.listPosts(userId, limitNum, cursor);
 
       return {
         success: true,
         data: result.posts.map(p => this.contentService.mapPostToDto(p)),
-        message: 'Posts obtenidos exitosamente',
+        message: userId ? 'Posts del usuario obtenidos exitosamente' : 'Feed global obtenido exitosamente',
         pagination: {
           limit: limitNum,
           hasMore: !!result.nextCursor,
@@ -227,24 +299,27 @@ Lista posts según el rol del usuario:
 
   /**
    * GET /content/feed
-   * Obtener feed personalizado (solo para usuarios USER)
+   * Obtener feed personalizado (para usuarios USER y MODEL)
+   * Endpoint dedicado para feed personalizado (alternativa a GET /content/posts?type=following)
    */
   @Get('feed')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: '📱 Obtener feed personalizado',
+    summary: '📱 Obtener feed personalizado (USER y MODEL)',
     description: `
 **¿Para qué sirve?**
-Obtiene el feed personalizado del usuario autenticado con posts de los modelos que sigue.
+Obtiene el feed personalizado del usuario autenticado con posts de los usuarios que sigue (pueden ser MODEL, USER o AGENCY según las reglas de negocio).
 
 **Casos de uso:**
-- Ver contenido de modelos seguidos en orden cronológico
+- Ver contenido de usuarios seguidos en orden cronológico
 - Feed personalizado basado en intereses
-- Descubrir nuevo contenido de modelos favoritos
+- Descubrir nuevo contenido de usuarios favoritos
+- MODEL puede ver posts de otros MODEL, USER y AGENCY que sigue
 
 **Restricciones:**
-- Solo disponible para usuarios con rol USER
-- Si no sigues a ningún modelo, retorna feed vacío
+- Disponible para usuarios con rol USER y MODEL
+- Si no sigues a ningún usuario, retorna feed vacío
+- AGENCY no tiene feed personalizado (debe usar GET /content/posts)
 
 **Ejemplo de uso:**
 \`\`\`
@@ -275,6 +350,9 @@ Authorization: Bearer {token}
   }
 }
 \`\`\`
+
+**Nota:**
+Este endpoint es equivalente a \`GET /content/posts?type=following\`. Usa este endpoint dedicado o el query param según prefieras.
     `.trim(),
   })
   @ApiQuery({ name: 'limit', required: false, description: 'Límite de resultados (default: 20)' })
@@ -286,7 +364,7 @@ Authorization: Bearer {token}
   })
   @ApiResponse({
     status: 403,
-    description: '❌ Solo usuarios con rol USER pueden acceder al feed personalizado',
+    description: '❌ Solo usuarios con rol USER o MODEL pueden acceder al feed personalizado',
   })
   async getPersonalizedFeed(
     @Request() req: any,
@@ -296,9 +374,12 @@ Authorization: Bearer {token}
     try {
       const userInfo = await getUserFromToken(req.token);
 
-      // Solo usuarios USER pueden acceder al feed personalizado
-      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
-        throw new ForbiddenException('Solo usuarios con rol USER pueden acceder al feed personalizado');
+      // Solo usuarios USER y MODEL pueden acceder al feed personalizado
+      const isUserOrModel = (userInfo.role === 'USER' || userInfo.role === 'user' || 
+                            userInfo.role === 'MODEL' || userInfo.role === 'model');
+      
+      if (!isUserOrModel) {
+        throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden acceder al feed personalizado. AGENCY debe usar GET /content/posts para feed global.');
       }
 
       const limitNum = limit ? parseInt(limit, 10) : 20;

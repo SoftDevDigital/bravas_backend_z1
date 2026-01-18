@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Delete,
   Param,
   Body,
   Query,
@@ -333,6 +334,112 @@ export class NotificationsController {
     } catch (error: any) {
       this.logger.error('Error al marcar todas las notificaciones como leídas', error?.stack, 'markAllAsRead', {
         error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * DELETE /notifications/:notificationId
+   * Eliminar notificación individual
+   */
+  @Delete(':notificationId')
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '🗑️ Eliminar notificación individual',
+    description: `
+**¿Para qué sirve?**
+Elimina una notificación específica del usuario autenticado.
+
+**Casos de uso:**
+- Usuario quiere eliminar una notificación específica
+- Limpiar notificaciones antiguas o no relevantes
+- Gestionar espacio en la lista de notificaciones
+
+**Restricciones:**
+- Solo puedes eliminar tus propias notificaciones
+- La notificación debe existir y pertenecer al usuario autenticado
+- La eliminación es permanente (no se puede recuperar)
+
+**Ejemplo de uso:**
+\`\`\`
+DELETE /api/v1/notifications/550e8400-e29b-41d4-a716-446655440000
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "message": "Notificación eliminada exitosamente",
+  "data": {
+    "notificationId": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({
+    name: 'notificationId',
+    description: 'ID único de la notificación a eliminar',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Notificación eliminada exitosamente',
+    type: ApiResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Notificación no encontrada o no pertenece al usuario',
+  })
+  async deleteNotification(@Request() req: any, @Param('notificationId') notificationId: string) {
+    const startTime = Date.now();
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      await this.notificationsService.deleteNotification(notificationId, userInfo.userId);
+
+      const duration = Date.now() - startTime;
+      this.logger.log('Notificación eliminada exitosamente', 'deleteNotification', {
+        notificationId,
+        userId: userInfo.userId,
+        duration: `${duration}ms`,
+      });
+
+      // Actualizar contador de no leídas vía WebSocket si está disponible
+      if (this.notificationsService['gateway']) {
+        try {
+          const unreadCount = await this.notificationsService.getUnreadCount(userInfo.userId);
+          this.notificationsService['gateway'].sendUnreadCountUpdate(userInfo.userId, unreadCount);
+        } catch (error: any) {
+          // No es crítico si falla la actualización del contador
+          this.logger.warn('Error al actualizar contador vía WebSocket', 'deleteNotification', {
+            userId: userInfo.userId,
+            error: error.message,
+          });
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Notificación eliminada exitosamente',
+        data: {
+          notificationId,
+        },
+      };
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      this.logger.error('Error al eliminar notificación', error?.stack, 'deleteNotification', {
+        notificationId,
+        error: error.message,
+        duration: `${duration}ms`,
       });
       throw error;
     }

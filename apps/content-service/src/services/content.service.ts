@@ -184,15 +184,16 @@ export class ContentService {
   }
 
   /**
-   * Obtener feed personalizado (posts de modelos seguidos)
+   * Obtener feed personalizado (posts de usuarios seguidos)
+   * Funciona tanto para USER como para MODEL
    */
-  async getPersonalizedFeed(buyerId: string, limit: number = 20, cursor?: string): Promise<{
+  async getPersonalizedFeed(userId: string, limit: number = 20, cursor?: string): Promise<{
     posts: PostRecord[];
     nextCursor?: string;
   }> {
     try {
-      // Obtener modelos seguidos desde user-service
-      let followingModelIds: string[] = [];
+      // Obtener usuarios seguidos desde user-service (pueden ser MODEL, USER o AGENCY)
+      let followingUserIds: string[] = [];
       try {
         const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
         const response = await this.dynamoClient.send(
@@ -200,33 +201,33 @@ export class ContentService {
             TableName: followTable,
             KeyConditionExpression: 'userId = :userId',
             ExpressionAttributeValues: {
-              ':userId': buyerId,
+              ':userId': userId,
             },
-            ProjectionExpression: 'modelId',
+            ProjectionExpression: 'modelId', // modelId contiene el ID del usuario seguido (puede ser MODEL, USER o AGENCY)
           }),
         );
-        followingModelIds = (response.Items || []).map((item) => item.modelId);
+        followingUserIds = (response.Items || []).map((item) => item.modelId);
       } catch (error) {
         // Si la tabla no existe o hay error, retornar feed vacío
-        this.logger.warn('No se pudo obtener modelos seguidos', 'getPersonalizedFeed', {
-          buyerId,
+        this.logger.warn('No se pudo obtener usuarios seguidos', 'getPersonalizedFeed', {
+          userId,
           error: (error as Error).message,
         });
         return { posts: [], nextCursor: undefined };
       }
 
-      if (followingModelIds.length === 0) {
-        // Si no sigue a nadie, retornar feed vacío o posts sugeridos
+      if (followingUserIds.length === 0) {
+        // Si no sigue a nadie, retornar feed vacío
         return { posts: [], nextCursor: undefined };
       }
 
-      // Obtener posts de los modelos seguidos
+      // Obtener posts de los usuarios seguidos (pueden ser MODEL, USER o AGENCY)
       // Usar BatchGet o múltiples queries
       const allPosts: PostRecord[] = [];
       
-      // Hacer queries en paralelo para cada modelo
+      // Hacer queries en paralelo para cada usuario seguido
       const postQueries = await Promise.all(
-        followingModelIds.map(async (modelId) => {
+        followingUserIds.map(async (followedUserId) => {
           try {
             const response = await this.dynamoClient.send(
               new QueryCommand({
@@ -238,11 +239,11 @@ export class ContentService {
                   '#status': 'status',
                 },
                 ExpressionAttributeValues: {
-                  ':userId': modelId,
+                  ':userId': followedUserId,
                   ':active': 'active',
                 },
                 ScanIndexForward: false,
-                Limit: 50, // Obtener más posts por modelo para luego ordenar
+                Limit: 50, // Obtener más posts por usuario para luego ordenar
               }),
             );
             return (response.Items || []) as PostRecord[];
@@ -253,8 +254,8 @@ export class ContentService {
       );
 
       // Combinar todos los posts
-      postQueries.forEach((modelPosts) => {
-        allPosts.push(...modelPosts);
+      postQueries.forEach((userPosts) => {
+        allPosts.push(...userPosts);
       });
 
       // Ordenar por fecha (más recientes primero)
@@ -294,7 +295,7 @@ export class ContentService {
       return { posts: paginatedPosts, nextCursor };
     } catch (error: any) {
       this.logger.error('Error al obtener feed personalizado', error?.stack, 'getPersonalizedFeed', {
-        buyerId,
+        userId,
         error: error.message,
       });
       throw error;

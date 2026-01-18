@@ -12,6 +12,7 @@ provider:
     DYNAMODB_USERS_TABLE: ${env:DYNAMODB_USERS_TABLE, 'bravas-users-dev'}
     DYNAMODB_USER_PROFILES_TABLE: ${env:DYNAMODB_USER_PROFILES_TABLE, 'bravas-user-profiles-dev'}
     DYNAMODB_USER_FOLLOWS_TABLE: ${env:DYNAMODB_USER_FOLLOWS_TABLE, 'bravas-user-follows-dev'}
+    DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE: ${env:DYNAMODB_MODEL_AGENCY_RELATIONS_TABLE, 'bravas-model-agency-relations-dev'}
     S3_AVATARS_BUCKET: ${env:S3_AVATARS_BUCKET, 'bravas-avatars-dev'}
 
 # Funciones Lambda

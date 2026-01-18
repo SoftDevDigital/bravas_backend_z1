@@ -304,3 +304,6 @@ Write-Info "======================"
 Write-Success "✅ Pruebas completadas"
 Write-Info "`nRevisa los resultados arriba para verificar que todos los endpoints funcionan correctamente."
 
+
+
+

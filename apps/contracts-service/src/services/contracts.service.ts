@@ -732,6 +732,7 @@ export class ContractsService {
       // El frontend puede parsearlo automáticamente desde ISO string
       startDate: record.startDate ? new Date(record.startDate).toISOString() : undefined,
       terminationDate: record.terminationDate ? new Date(record.terminationDate).toISOString() : undefined,
+      createdAt: record.createdAt || (record.createdAtTimestamp ? new Date(record.createdAtTimestamp).toISOString() : undefined),
       totalEarnings: record.totalEarnings,
       pdfUrl: record.pdfUrl,
     };

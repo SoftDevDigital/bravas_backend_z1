@@ -142,7 +142,7 @@ file: [archivo de imagen]
         file: {
           type: 'string',
           format: 'binary',
-          description: 'Archivo de imagen (JPEG, PNG o WebP, máximo 5MB)',
+          description: '📸 Archivo de imagen para avatar (JPEG, PNG o WebP, máximo 5MB). \n\n**IMPORTANTE:** En Swagger, usa el botón "Choose File" que aparece cuando seleccionas este endpoint. El nombre del campo en el FormData debe ser exactamente `file`. \n\n**Ejemplo para Frontend:**\n```javascript\nconst formData = new FormData();\nformData.append("file", fileInput.files[0]);\n\nfetch("http://localhost:3001/api/v1/users/me/avatar", {\n  method: "POST",\n  headers: { "Authorization": "Bearer " + token },\n  body: formData\n});\n```',
         },
       },
     },

@@ -1,0 +1,78 @@
+RUTAS DEL USER SERVICE QUE PUEDE USAR EL ROL USER
+==================================================
+
+✅ RUTAS QUE USER PUEDE USAR:
+
+1. GET /users/me
+   - Descripción: Obtener mi perfil completo
+   - Requiere autenticación: Sí
+   - Notas: Todos los roles pueden usarla
+
+2. PUT /users/me
+   - Descripción: Actualizar mi perfil
+   - Requiere autenticación: Sí
+   - Notas: Todos los roles pueden usarla
+
+3. GET /users/search
+   - Descripción: Buscar usuarios en la plataforma
+   - Requiere autenticación: Sí
+   - Notas: Busca en nombres, emails y biografías
+
+4. GET /users/models
+   - Descripción: Listar modelos del marketplace
+   - Requiere autenticación: Sí
+   - Notas: Muestra modelos disponibles para representación
+
+5. GET /users/agencies
+   - Descripción: Listar agencias del marketplace
+   - Requiere autenticación: Sí
+   - Notas: Muestra agencias con información pública
+
+6. GET /users/models/:id
+   - Descripción: Ver perfil público de un modelo
+   - Requiere autenticación: No (público)
+   - Notas: USER puede ver perfiles de modelos
+
+7. GET /users/agencies/:id
+   - Descripción: Ver perfil público de una agencia
+   - Requiere autenticación: Sí (según código)
+   - Notas: USER puede ver perfil de agencia SOLO para conectar con modelos
+
+8. POST /users/models/:modelId/follow
+   - Descripción: Seguir a un modelo o usuario
+   - Requiere autenticación: Sí
+   - Restricción: USER puede seguir USER y MODEL, NO puede seguir AGENCY
+
+9. DELETE /users/models/:modelId/follow
+   - Descripción: Dejar de seguir a un modelo o usuario
+   - Requiere autenticación: Sí
+   - Restricción: USER puede dejar de seguir
+
+10. GET /users/me/following
+    - Descripción: Listar usuarios que sigo
+    - Requiere autenticación: Sí
+    - Restricción: Solo USER o MODEL pueden ver sus seguidos
+
+11. GET /users/:id/followers
+    - Descripción: Listar seguidores de un usuario
+    - Requiere autenticación: No (público)
+    - Notas: Cualquier usuario puede ver seguidores de cualquier usuario
+
+❌ RUTAS QUE USER NO PUEDE USAR:
+
+- PUT /users/me/availability (solo MODEL)
+- GET /users/me/availability (solo MODEL)
+- POST /users/agencies/:agencyId/apply (solo MODEL)
+- POST /users/models/:modelId/propose (solo AGENCY)
+- POST /users/agencies/:agencyId/contact (solo AGENCY)
+- GET /users/me/buyers (solo MODEL)
+- GET /users/me/models (solo AGENCY)
+- GET /users/me/buyer-stats (solo MODEL)
+- GET /users/stats (solo ADMIN)
+- PUT /users/:id (solo ADMIN)
+- DELETE /users/:id (solo ADMIN_LEVEL_3)
+- POST /users/:id/approve (solo ADMIN)
+- POST /users/:id/verify-payment (solo ADMIN)
+- PUT /users/:id/support-notes (solo SUPPORT/ADMIN)
+
+TOTAL: 11 rutas que USER puede usar

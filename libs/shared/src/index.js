@@ -19,4 +19,5 @@ __exportStar(require("./aws"), exports);
 __exportStar(require("./common"), exports);
 __exportStar(require("./serverless/serverless-app"), exports);
 __exportStar(require("./documentation"), exports);
+__exportStar(require("./services"), exports);
 //# sourceMappingURL=index.js.map

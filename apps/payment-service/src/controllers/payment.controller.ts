@@ -175,46 +175,100 @@ export class PaymentController {
 
   /**
    * GET /payments/me/movements
-   * Obtener historial de movimientos del buyer autenticado
+   * Obtener historial de movimientos del usuario autenticado
+   * Para BUYER: muestra pagos realizados (compras, suscripciones, tips)
+   * Para MODEL: muestra ganancias recibidas y comisiones de agencia deducidas
    */
   @Get('me/movements')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: '💰 Historial de movimientos',
+    summary: '💰 Historial de movimientos (BUYER y MODEL)',
     description: `
 **¿Para qué sirve?**
-Obtiene el historial completo de transacciones del usuario autenticado (buyer).
+Obtiene el historial completo de transacciones del usuario autenticado.
 
-**Casos de uso:**
+**Para BUYER (compradores):**
 - Ver todas las compras realizadas
 - Ver suscripciones activas y canceladas
 - Ver tips enviados
 - Filtrar por tipo de transacción
 - Ver historial de gastos
 
+**Para MODEL (modelos):**
+- Ver ganancias recibidas de compradores
+- Ver comisiones de agencia deducidas (si tiene agencia)
+- Ver montos netos después de comisiones
+- Filtrar por tipo: earnings (ganancias), agency_commissions (comisiones), all (todo)
+
 **Filtros disponibles:**
-- \`type\`: Filtrar por tipo (purchases, subscriptions, tips, all)
+- \`type\`: Filtrar por tipo
+  - Para BUYER: purchases, subscriptions, tips, all
+  - Para MODEL: earnings, agency_commissions, all
 - \`page\`: Número de página (default: 1)
 - \`limit\`: Resultados por página (default: 20)
 
-**Tipos de transacciones:**
+**Tipos de transacciones (BUYER):**
 - \`purchases\`: Compras de packs, PPV
 - \`subscriptions\`: Suscripciones a modelos
 - \`tips\`: Tips enviados
-- \`all\`: Todas las transacciones
+- \`all\`: Todas las transacciones realizadas
 
-**Ejemplo de uso:**
+**Tipos de transacciones (MODEL):**
+- \`earnings\`: Solo ganancias recibidas (donde eres receptor)
+- \`agency_commissions\`: Solo comisiones de agencia deducidas
+- \`all\`: Ganancias y comisiones (movimientos completos)
+
+**Ejemplo de uso (BUYER):**
 \`\`\`
 GET /payments/me/movements?type=purchases&page=1&limit=20
 Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de uso (MODEL):**
+\`\`\`
+GET /payments/me/movements?type=earnings&page=1&limit=20
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta (MODEL con ganancias):**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "payment_123",
+        "type": "earning",
+        "direction": "incoming",
+        "grossAmount": 10000,
+        "netAmount": 8500,
+        "platformFee": 1000,
+        "agencyCommission": 500,
+        "agencyId": "agency_456",
+        "currency": "usd",
+        "payerId": "buyer_789",
+        "status": "succeeded",
+        "description": "Ganancia por subscription",
+        "paymentType": "subscription",
+        "createdAt": "2024-01-20T15:30:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 50,
+      "totalPages": 3
+    }
+  }
+}
 \`\`\`
     `.trim(),
   })
   @ApiQuery({
     name: 'type',
     required: false,
-    enum: ['purchases', 'subscriptions', 'tips', 'all'],
-    description: 'Tipo de transacción a filtrar',
+    enum: ['purchases', 'subscriptions', 'tips', 'earnings', 'agency_commissions', 'all'],
+    description: 'Tipo de transacción a filtrar. Para BUYER: purchases, subscriptions, tips, all. Para MODEL: earnings, agency_commissions, all',
     example: 'all',
   })
   @ApiQuery({
@@ -247,17 +301,25 @@ Authorization: Bearer {token}
   ) {
     const startTime = Date.now();
     try {
-      // Obtener userId del token
+      // Obtener userId y rol del token
       const userInfo = await getUserFromToken(req.token);
       
       const pageNum = page ? Number.parseInt(page, 10) : 1;
       const limitNum = limit ? Number.parseInt(limit, 10) : 20;
-      const filterType = (type && ['all', 'purchases', 'subscriptions', 'tips'].includes(type)) 
-        ? (type as 'all' | 'purchases' | 'subscriptions' | 'tips')
+      
+      // Validar tipo según rol
+      const isModel = userInfo.role === 'MODEL' || userInfo.role === 'model';
+      const validTypesForModel = ['all', 'earnings', 'agency_commissions'];
+      const validTypesForBuyer = ['all', 'purchases', 'subscriptions', 'tips'];
+      const validTypes = isModel ? validTypesForModel : validTypesForBuyer;
+      
+      const filterType = (type && validTypes.includes(type)) 
+        ? (type as 'all' | 'purchases' | 'subscriptions' | 'tips' | 'earnings' | 'agency_commissions')
         : 'all';
 
       const result = await this.paymentService.getUserMovements(
         userInfo.userId,
+        userInfo.role,
         filterType,
         pageNum,
         limitNum,

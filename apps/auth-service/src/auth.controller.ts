@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Put,
   Delete,
   Body,
   Param,
@@ -26,6 +27,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh.dto';
 import { VerifyOTPDto } from './dto/verify-otp.dto';
 import { ResendOTPDto } from './dto/resend-otp.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import {
   RegisterResponseDto,
   LoginResponseDto,
@@ -931,6 +933,134 @@ Authorization: Bearer <accessToken>
         error: error.message,
         duration: `${duration}ms`,
       });
+      throw error;
+    }
+  }
+
+  /**
+   * PUT /auth/password
+   * Cambiar contraseña del usuario autenticado
+   * 
+   * **Endpoint Privado** - Requiere autenticación
+   * 
+   * Permite al usuario autenticado cambiar su contraseña.
+   * Requiere la contraseña actual y la nueva contraseña.
+   * 
+   * **Notas importantes:**
+   * - El usuario debe estar autenticado (token válido)
+   * - La contraseña actual debe ser correcta
+   * - La nueva contraseña debe cumplir con los requisitos de Cognito
+   * - La nueva contraseña no puede ser igual a la actual
+   */
+  @Put('password')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: '🔒 Cambiar contraseña',
+    description: `
+**¿Para qué sirve?**
+Permite al usuario autenticado cambiar su contraseña de forma segura.
+
+**Casos de uso:**
+- Usuario quiere cambiar su contraseña por seguridad
+- Contraseña comprometida o olvidada (después de verificar identidad)
+- Actualizar contraseña regularmente
+
+**Proceso:**
+1. Usuario proporciona contraseña actual y nueva contraseña
+2. Sistema verifica que la contraseña actual sea correcta
+3. Sistema valida que la nueva contraseña cumpla requisitos
+4. Sistema actualiza la contraseña en Cognito
+5. Usuario debe iniciar sesión nuevamente (opcional, según configuración)
+
+**Requisitos de la nueva contraseña:**
+- Mínimo 8 caracteres
+- Debe incluir al menos una letra mayúscula
+- Debe incluir al menos una letra minúscula
+- Debe incluir al menos un número
+- No puede ser igual a la contraseña actual
+
+**Autenticación requerida:**
+Este endpoint requiere un token JWT válido en el header Authorization.
+
+**Ejemplo de uso:**
+\`\`\`
+PUT /api/v1/auth/password
+Authorization: Bearer {accessToken}
+Content-Type: application/json
+
+{
+  "currentPassword": "Password123!",
+  "newPassword": "NewPassword123!"
+}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "message": "Contraseña cambiada exitosamente",
+  "email": "usuario@example.com"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiBody({
+    type: ChangePasswordDto,
+    description: 'Contraseña actual y nueva contraseña',
+    examples: {
+      ejemplo1: {
+        summary: 'Cambio de contraseña',
+        value: {
+          currentPassword: 'Password123!',
+          newPassword: 'NewPassword123!',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Contraseña cambiada exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Contraseña cambiada exitosamente' },
+        email: { type: 'string', example: 'usuario@example.com' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ La nueva contraseña no cumple requisitos o es igual a la actual',
+    type: ErrorResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ Token inválido, expirado o contraseña actual incorrecta',
+    type: ErrorResponseDto,
+  })
+  async changePassword(@Request() req: any, @Body() changePasswordDto: ChangePasswordDto) {
+    const startTime = Date.now();
+    
+    try {
+      const result = await this.authService.changePassword(req.token, changePasswordDto);
+      
+      const duration = Date.now() - startTime;
+      this.logger.log('Contraseña cambiada exitosamente', 'changePassword', {
+        email: result.email,
+        duration: `${duration}ms`,
+      });
+      
+      return result;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      this.logger.error('Error al cambiar contraseña', error?.stack, 'changePassword', {
+        error: error.message,
+        duration: `${duration}ms`,
+      });
+      
       throw error;
     }
   }

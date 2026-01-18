@@ -12,6 +12,12 @@ const common_1 = require("@nestjs/common");
 let GlobalExceptionFilter = GlobalExceptionFilter_1 = class GlobalExceptionFilter {
     logger = new common_1.Logger(GlobalExceptionFilter_1.name);
     catch(exception, host) {
+        console.log('🔍 [ExceptionFilter] INICIO - Excepción capturada:', {
+            exceptionType: exception?.constructor?.name || 'Unknown',
+            isHttpException: exception instanceof common_1.HttpException,
+            isError: exception instanceof Error,
+            errorMessage: exception?.message || 'No message',
+        });
         const ctx = host.switchToHttp();
         const response = ctx.getResponse();
         const request = ctx.getRequest();
@@ -19,23 +25,45 @@ let GlobalExceptionFilter = GlobalExceptionFilter_1 = class GlobalExceptionFilte
         let message = 'Internal server error';
         let errorCode = 'INTERNAL_ERROR';
         let details = null;
+        console.log('🔍 [ExceptionFilter] Request info:', {
+            path: request.path,
+            method: request.method,
+            headersSent: response.headersSent,
+        });
         if (exception instanceof common_1.HttpException) {
             status = exception.getStatus();
             const exceptionResponse = exception.getResponse();
             if (typeof exceptionResponse === 'string') {
                 message = exceptionResponse;
             }
-            else if (typeof exceptionResponse === 'object') {
+            else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
                 const responseObj = exceptionResponse;
-                message = responseObj.message || exception.message || message;
+                if (Array.isArray(responseObj.message)) {
+                    message = responseObj.message.join(', ');
+                }
+                else {
+                    message = responseObj.message || exception.message || message;
+                }
                 errorCode = responseObj.errorCode || this.getErrorCode(status);
-                details = responseObj.details || null;
+                details = responseObj.details || responseObj.errors || null;
+            }
+            else {
+                message = exception.message || message;
             }
         }
         else if (exception instanceof Error) {
             message = exception.message;
             errorCode = 'UNKNOWN_ERROR';
         }
+        if (!message || message === 'Internal server error') {
+            message = exception instanceof Error ? exception.message : 'Error desconocido';
+        }
+        console.log('🔍 [ExceptionFilter] Información de error procesada:', {
+            status,
+            message,
+            errorCode,
+            hasDetails: !!details,
+        });
         this.logger.error(`Exception caught: ${errorCode} - ${message}`, {
             errorCode,
             message,
@@ -50,7 +78,7 @@ let GlobalExceptionFilter = GlobalExceptionFilter_1 = class GlobalExceptionFilte
             success: false,
             error: {
                 code: errorCode,
-                message,
+                message: message || 'Error desconocido',
                 statusCode: status,
                 timestamp: new Date().toISOString(),
                 path: request.path,
@@ -62,7 +90,67 @@ let GlobalExceptionFilter = GlobalExceptionFilter_1 = class GlobalExceptionFilte
         if (process.env.NODE_ENV === 'development' && exception instanceof Error && exception.stack) {
             responseBody.error.stack = exception.stack;
         }
-        response.status(status).json(responseBody);
+        if (!responseBody.error.message || responseBody.error.message === 'Internal server error') {
+            if (exception instanceof Error) {
+                responseBody.error.message = exception.message || 'Error desconocido';
+            }
+        }
+        this.logger.debug('Sending error response', {
+            status,
+            message: responseBody.error.message,
+            path: request.path,
+        });
+        try {
+            if (response.headersSent) {
+                this.logger.warn('Respuesta ya fue enviada, no se puede enviar error', 'ExceptionFilter', {
+                    path: request.path,
+                    status,
+                    message,
+                });
+                return;
+            }
+            console.log('🔍 [ExceptionFilter] Enviando respuesta:', {
+                status,
+                message: responseBody.error.message,
+                responseBodyKeys: Object.keys(responseBody),
+                responseBodyJSON: JSON.stringify(responseBody),
+            });
+            const responseResult = response.status(status).json(responseBody);
+            console.log('✅ [ExceptionFilter] Respuesta enviada exitosamente:', {
+                responseResult: responseResult || 'undefined',
+                headersSent: response.headersSent,
+                finished: response.finished,
+            });
+            this.logger.debug('Respuesta de error enviada exitosamente', 'ExceptionFilter', {
+                status,
+                message: responseBody.error.message,
+                path: request.path,
+            });
+        }
+        catch (sendError) {
+            this.logger.error('Error al enviar respuesta de error', sendError?.stack, 'ExceptionFilter', {
+                originalError: message,
+                sendError: sendError?.message,
+                headersSent: response.headersSent,
+                finished: response.finished,
+                writableEnded: response.writableEnded,
+            });
+            if (!response.headersSent) {
+                try {
+                    response.status(status).json({
+                        success: false,
+                        error: {
+                            code: errorCode,
+                            message: message || 'Error al procesar solicitud',
+                            statusCode: status,
+                        },
+                    });
+                }
+                catch (secondError) {
+                    this.logger.error('Error al enviar respuesta mínima', secondError?.stack, 'ExceptionFilter');
+                }
+            }
+        }
     }
     getErrorCode(status) {
         const errorCodes = {

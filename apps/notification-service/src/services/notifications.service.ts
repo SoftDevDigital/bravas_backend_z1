@@ -10,6 +10,7 @@ import {
   PutCommand,
   QueryCommand,
   UpdateCommand,
+  DeleteCommand,
   ScanCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { AWSClientFactory, loadCredentials } from '@bravas/shared';
@@ -419,6 +420,53 @@ export class NotificationsService {
       });
       // No lanzar error, retornar 0 en caso de fallo
       return 0;
+    }
+  }
+
+  /**
+   * Eliminar notificación individual
+   */
+  async deleteNotification(notificationId: string, userId: string): Promise<void> {
+    try {
+      // Verificar que la notificación existe y pertenece al usuario
+      const notification = await this.getNotification(notificationId, userId);
+
+      // Eliminar la notificación
+      await this.dynamoClient.send(
+        new DeleteCommand({
+          TableName: this.notificationsTable,
+          Key: { notificationId },
+        }),
+      );
+
+      this.logger.log('Notificación eliminada exitosamente', 'deleteNotification', {
+        notificationId,
+        userId,
+        type: notification.type,
+      });
+
+      // Actualizar contador de no leídas vía WebSocket si está disponible
+      if (this.gateway) {
+        try {
+          const unreadCount = await this.getUnreadCount(userId);
+          this.gateway.sendUnreadCountUpdate(userId, unreadCount);
+        } catch (error: any) {
+          this.logger.warn('Error al actualizar contador vía WebSocket', 'deleteNotification', {
+            userId,
+            error: error.message,
+          });
+        }
+      }
+    } catch (error: any) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error('Error al eliminar notificación', error?.stack, 'deleteNotification', {
+        notificationId,
+        userId,
+        error: error.message,
+      });
+      throw new BadRequestException(`Error al eliminar notificación: ${error.message}`);
     }
   }
 

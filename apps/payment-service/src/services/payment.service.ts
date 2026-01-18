@@ -365,11 +365,14 @@ export class PaymentService {
   }
 
   /**
-   * Obtener historial de movimientos del buyer con filtros
+   * Obtener historial de movimientos del usuario (buyer o MODEL)
+   * Para buyers: muestra pagos realizados
+   * Para MODEL: muestra ganancias recibidas (donde es recipientId) y comisiones de agencia
    */
   async getUserMovements(
     userId: string,
-    type: 'purchases' | 'subscriptions' | 'tips' | 'all' = 'all',
+    userRole?: string,
+    type: 'purchases' | 'subscriptions' | 'tips' | 'earnings' | 'agency_commissions' | 'all' = 'all',
     page: number = 1,
     limit: number = 20,
   ): Promise<{
@@ -384,56 +387,140 @@ export class PaymentService {
   }> {
     try {
       const skip = (page - 1) * limit;
+      const isModel = userRole === 'MODEL' || userRole === 'model';
+      let movements: any[] = [];
 
-      // Obtener pagos del usuario
-      let paymentsResponse;
-      try {
-        paymentsResponse = await this.dynamoClient.send(
-          new QueryCommand({
-            TableName: this.paymentsTable,
-            IndexName: 'userId-createdAt-index',
-            KeyConditionExpression: 'userId = :userId',
-            ExpressionAttributeValues: {
-              ':userId': userId,
-            },
-            ScanIndexForward: false,
-          }),
-        );
-      } catch (indexError: any) {
-        // Si el índice no existe, retornar lista vacía en lugar de fallar
-        if (indexError.message?.includes('index') || indexError.message?.includes('Index') || indexError.message?.includes('ResourceNotFoundException')) {
-          this.logger.warn('Índice userId-createdAt-index no encontrado, retornando lista vacía', 'getUserMovements', { userId });
-          paymentsResponse = { Items: [] };
-        } else {
-          throw indexError;
+      // Para MODEL: obtener ganancias (donde es recipientId)
+      if (isModel && (type === 'all' || type === 'earnings' || type === 'agency_commissions')) {
+        try {
+          // Obtener pagos donde MODEL es el receptor
+          const earningsResponse = await this.dynamoClient.send(
+            new QueryCommand({
+              TableName: this.paymentsTable,
+              IndexName: 'recipientId-createdAt-index',
+              KeyConditionExpression: 'recipientId = :recipientId',
+              ExpressionAttributeValues: {
+                ':recipientId': userId,
+              },
+              ScanIndexForward: false,
+            }),
+          );
+
+          const earnings = (earningsResponse.Items || []) as PaymentRecord[];
+          
+          earnings.forEach((payment) => {
+            // Calcular monto neto después de comisiones
+            const netAmount = payment.distribution?.recipient || payment.recipientAmount || 0;
+            const agencyCommission = payment.distribution?.agency || payment.agencyFee || 0;
+            const platformFee = payment.distribution?.bravas || payment.platformFee || 0;
+            const grossAmount = payment.amount;
+
+            // Solo incluir si coincide con el tipo solicitado
+            const includeAsEarnings = type === 'all' || type === 'earnings';
+            const includeAsCommission = type === 'all' || type === 'agency_commissions';
+
+            if (includeAsEarnings && payment.status === 'succeeded') {
+              movements.push({
+                id: payment.paymentId,
+                type: 'earning',
+                direction: 'incoming', // Pago recibido
+                grossAmount: grossAmount,
+                netAmount: netAmount,
+                platformFee: platformFee,
+                agencyCommission: agencyCommission > 0 ? agencyCommission : undefined,
+                agencyId: payment.agencyId,
+                currency: payment.currency,
+                payerId: payment.userId, // Quien pagó
+                status: payment.status,
+                description: payment.metadata?.description || `Ganancia por ${payment.type}`,
+                paymentType: payment.type,
+                createdAt: payment.createdAt,
+                processedAt: payment.processedAt ? new Date(payment.processedAt).toISOString() : undefined,
+                metadata: payment.metadata,
+                distribution: payment.distribution,
+              });
+            }
+
+            // Incluir comisión de agencia como movimiento separado si existe
+            if (includeAsCommission && agencyCommission > 0 && payment.status === 'succeeded') {
+              movements.push({
+                id: `commission_${payment.paymentId}`,
+                type: 'agency_commission',
+                direction: 'outgoing', // Comisión deducida
+                amount: -agencyCommission, // Negativo para mostrar como deducción
+                grossAmount: grossAmount,
+                currency: payment.currency,
+                agencyId: payment.agencyId,
+                relatedPaymentId: payment.paymentId,
+                status: payment.status,
+                description: `Comisión de agencia por ${payment.type}`,
+                paymentType: payment.type,
+                createdAt: payment.createdAt,
+                processedAt: payment.processedAt ? new Date(payment.processedAt).toISOString() : undefined,
+              });
+            }
+          });
+        } catch (error: any) {
+          // Si el índice no existe, continuar sin ganancias
+          this.logger.warn('No se pudieron obtener ganancias del modelo', 'getUserMovements', {
+            userId,
+            error: error.message,
+          });
         }
       }
 
-      let movements: any[] = [];
-
-      // Procesar pagos según el tipo
-      if (type === 'all' || type === 'purchases' || type === 'tips') {
-        const payments = (paymentsResponse.Items || []) as PaymentRecord[];
-        
-        payments.forEach((payment) => {
-          if (type === 'all' || (type === 'purchases' && (payment.type === 'ppv' || payment.metadata?.type === 'pack_purchase')) || (type === 'tips' && payment.type === 'tip')) {
-            movements.push({
-              id: payment.paymentId,
-              type: payment.type === 'tip' ? 'tip' : 'purchase',
-              amount: payment.amount,
-              currency: payment.currency,
-              recipientId: payment.recipientId,
-              status: payment.status,
-              description: payment.metadata?.description || `Pago ${payment.type}`,
-              createdAt: payment.createdAt,
-              metadata: payment.metadata,
-            });
+      // Para todos los usuarios: obtener pagos realizados (donde es userId)
+      if (!isModel || (type !== 'earnings' && type !== 'agency_commissions')) {
+        let paymentsResponse;
+        try {
+          paymentsResponse = await this.dynamoClient.send(
+            new QueryCommand({
+              TableName: this.paymentsTable,
+              IndexName: 'userId-createdAt-index',
+              KeyConditionExpression: 'userId = :userId',
+              ExpressionAttributeValues: {
+                ':userId': userId,
+              },
+              ScanIndexForward: false,
+            }),
+          );
+        } catch (indexError: any) {
+          // Si el índice no existe, retornar lista vacía en lugar de fallar
+          if (indexError.message?.includes('index') || indexError.message?.includes('Index') || indexError.message?.includes('ResourceNotFoundException')) {
+            this.logger.warn('Índice userId-createdAt-index no encontrado, retornando lista vacía', 'getUserMovements', { userId });
+            paymentsResponse = { Items: [] };
+          } else {
+            throw indexError;
           }
-        });
+        }
+
+        // Procesar pagos según el tipo
+        if (type === 'all' || type === 'purchases' || type === 'tips') {
+          const payments = (paymentsResponse?.Items || []) as PaymentRecord[];
+          
+          payments.forEach((payment) => {
+            if (type === 'all' || (type === 'purchases' && (payment.type === 'ppv' || payment.metadata?.type === 'pack_purchase')) || (type === 'tips' && payment.type === 'tip')) {
+              movements.push({
+                id: payment.paymentId,
+                type: payment.type === 'tip' ? 'tip' : 'purchase',
+                direction: 'outgoing', // Pago realizado
+                amount: payment.amount,
+                currency: payment.currency,
+                recipientId: payment.recipientId,
+                status: payment.status,
+                description: payment.metadata?.description || `Pago ${payment.type}`,
+                createdAt: payment.createdAt,
+                metadata: payment.metadata,
+              });
+            }
+          });
+        }
       }
 
       // Si se solicitan suscripciones, obtenerlas también
-      if (type === 'all' || type === 'subscriptions') {
+      // Para BUYER: suscripciones donde userId es el suscriptor
+      // Para MODEL: ya están incluidas en earnings como pagos recibidos
+      if (!isModel && (type === 'all' || type === 'subscriptions')) {
         try {
           const subscriptionsTable = this.credentials.dynamodb?.subscriptionsTable || 'subscriptions';
           const subscriptionsResponse = await this.dynamoClient.send(
@@ -452,6 +539,7 @@ export class PaymentService {
             movements.push({
               id: sub.subscriptionId,
               type: 'subscription',
+              direction: 'outgoing', // Suscripción pagada por el buyer
               amount: sub.amount,
               currency: sub.currency,
               recipientId: sub.recipientId,

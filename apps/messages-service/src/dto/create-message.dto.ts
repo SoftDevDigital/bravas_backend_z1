@@ -59,6 +59,21 @@ export class CreateMessageDto {
     description: 'Datos del contrato (para tipos contract_*)',
     type: Object,
     additionalProperties: true,
+    example: {
+      modelId: 'model_123',
+      modelName: 'Ana Martínez',
+      modelUsername: '@ana_model',
+      modelAvatar: 'https://cdn.bravas.com/avatars/model123.jpg',
+      agencyId: 'agency_456',
+      agencyName: 'Model Agency Pro',
+      contractType: 'con_pago',
+      modelPercentage: 88,
+      agencyPercentage: 12,
+      bravasCommission: 12,
+      advancePayment: 50000,
+      notes: 'Contrato con compromiso de 3 meses',
+      status: 'pending',
+    },
   })
   @ValidateIf((o) => 
     o.type === MessageType.CONTRACT_PDF || 
@@ -71,11 +86,15 @@ export class CreateMessageDto {
     modelId?: string;
     modelName?: string;
     modelUsername?: string;
+    modelAvatar?: string;
     agencyId?: string;
     agencyName?: string;
+    contractType?: 'sin_pago' | 'con_pago';
     modelPercentage?: number;
     agencyPercentage?: number;
     bravasCommission?: number;
+    advancePayment?: number;
+    notes?: string;
     pdfUrl?: string;
     pdfDataUri?: string;
     contractDate?: string;
@@ -86,6 +105,27 @@ export class CreateMessageDto {
     description: 'Datos de transferencia (para tipos transfer_*)',
     type: Object,
     additionalProperties: true,
+    example: {
+      modelId: 'model_123',
+      modelName: 'Ana Martínez',
+      modelUsername: '@ana_model',
+      modelAvatar: 'https://cdn.bravas.com/avatars/model123.jpg',
+      requestingAgencyId: 'agency_456',
+      requestingAgencyName: 'New Agency',
+      fromAgency: 'New Agency',
+      currentAgencyId: 'agency_789',
+      currentAgencyName: 'Current Agency',
+      toAgency: 'Current Agency',
+      transferAmount: 100000,
+      requestedAmount: 100000,
+      bravasCommission: 12000,
+      netAmount: 88000,
+      modelPart: 44000,
+      agencyPart: 44000,
+      transferNotes: 'Solicitud de transferencia de contrato',
+      notes: 'Solicitud de transferencia de contrato',
+      status: 'pending',
+    },
   })
   @ValidateIf((o) => 
     o.type === MessageType.AGENCY_TRANSFER_REQUEST || 
@@ -97,15 +137,23 @@ export class CreateMessageDto {
     transferId?: string;
     requestingAgencyId?: string;
     requestingAgencyName?: string;
+    fromAgency?: string; // Alias de requestingAgencyName para compatibilidad con frontend
     currentAgencyId?: string;
     currentAgencyName?: string;
+    toAgency?: string; // Alias de currentAgencyName para compatibilidad con frontend
     modelId?: string;
     modelName?: string;
+    modelUsername?: string;
+    modelAvatar?: string;
     modelPhotos?: string[];
-    transferAmount?: number;
-    bravasCommission?: number;
-    netAmount?: number;
+    transferAmount?: number; // Monto total en centavos
+    requestedAmount?: number; // Alias de transferAmount
+    bravasCommission?: number; // Comisión de Bravas en centavos
+    netAmount?: number; // Monto neto después de comisión Bravas
+    modelPart?: number; // Parte del modelo en centavos
+    agencyPart?: number; // Parte de la agencia en centavos
     transferNotes?: string;
+    notes?: string; // Alias de transferNotes
     status?: 'pending' | 'accepted' | 'rejected';
   };
 

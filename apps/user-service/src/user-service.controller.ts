@@ -532,7 +532,7 @@ if (error) {
         avatar: {
           type: 'string',
           format: 'binary',
-          description: '📸 Archivo de imagen para foto de perfil (JPEG, PNG, WebP, máximo 5MB). Solo disponible en multipart/form-data.',
+          description: '📸 Archivo de imagen para foto de perfil (JPEG, PNG, WebP, máximo 5MB). \n\n**IMPORTANTE:** Este campo solo está disponible cuando usas `Content-Type: multipart/form-data`. En Swagger, selecciona "multipart/form-data" del dropdown y verás un botón "Choose File" para seleccionar tu imagen. El nombre del campo en el FormData debe ser exactamente `avatar`.',
         },
         avatarUrl: {
           type: 'string',

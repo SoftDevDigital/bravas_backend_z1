@@ -73,11 +73,16 @@ export class UserService {
         }),
       );
 
+      // Construir respuesta consolidando datos de users y user_profiles
+      // Priorizar avatarUrl de users sobre user_profiles para evitar duplicación
+      const profileData = profileResponse.Item || {};
+      // Eliminar avatarUrl de profile si existe (ya está en nivel principal desde users)
+      const { avatarUrl, ...profileWithoutAvatar } = profileData;
       const result = {
         success: true,
         data: {
           ...userResponse.Item,
-          profile: profileResponse.Item || {},
+          profile: profileWithoutAvatar,
         },
       };
 
@@ -196,7 +201,8 @@ export class UserService {
       }
 
       // Actualizar en tabla user_profiles si hay campos de perfil
-      const profileFields = ['bio', 'avatarUrl', 'preferences'];
+      // NOTA: avatarUrl NO está aquí porque se guarda solo en la tabla users (nivel principal)
+      const profileFields = ['bio', 'preferences'];
       const hasProfileFields = profileFields.some((field) => updateDto[field] !== undefined);
 
       if (hasProfileFields) {

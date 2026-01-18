@@ -1,6 +1,5 @@
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { INestApplication } from '@nestjs/common';
-import { loadCredentials } from '../config';
 
 /**
  * Configuración de Swagger/Scalar para documentación de API
@@ -24,7 +23,8 @@ export function setupSwagger(
   app: INestApplication,
   options: SwaggerConfigOptions = {},
 ): void {
-  const credentials = loadCredentials();
+  // No cargar credenciales completas aquí - solo se necesitan para Swagger
+  // Las credenciales se cargan cuando se usan los servicios
   const environment = options.environment || process.env.ENVIRONMENT || 'dev';
   const isDev = environment === 'dev';
 

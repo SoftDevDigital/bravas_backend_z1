@@ -66,10 +66,10 @@ export class MarketplaceQueryDto {
   @ApiPropertyOptional({
     description: 'Ordenar por campo',
     example: 'createdAt',
-    enum: ['createdAt', 'reputation', 'totalSales', 'name'],
+    enum: ['createdAt', 'reputation', 'totalSales', 'name', 'rating', 'experience', 'totalModels'],
   })
   @IsOptional()
-  @IsEnum(['createdAt', 'reputation', 'totalSales', 'name'])
+  @IsEnum(['createdAt', 'reputation', 'totalSales', 'name', 'rating', 'experience', 'totalModels'])
   sortBy?: string = 'createdAt';
 
   @ApiPropertyOptional({
@@ -80,6 +80,49 @@ export class MarketplaceQueryDto {
   @IsOptional()
   @IsEnum(['asc', 'desc'])
   order?: 'asc' | 'desc' = 'desc';
+
+  @ApiPropertyOptional({
+    description: 'Solo agencias recomendadas',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  recommended?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Rating mínimo de la agencia (0-5)',
+    example: 4,
+    minimum: 0,
+    maximum: 5,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  minRating?: number;
+
+  @ApiPropertyOptional({
+    description: 'Años de experiencia mínimo de la agencia',
+    example: 5,
+    minimum: 0,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  minExperience?: number;
+
+  @ApiPropertyOptional({
+    description: 'Cantidad mínima de modelos gestionados por la agencia',
+    example: 10,
+    minimum: 0,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  minModels?: number;
 }
 
 

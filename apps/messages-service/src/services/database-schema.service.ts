@@ -71,11 +71,15 @@ export interface MessageRecord {
     modelId?: string;
     modelName?: string;
     modelUsername?: string;
+    modelAvatar?: string; // Avatar del modelo para mostrar en la propuesta
     agencyId?: string;
     agencyName?: string;
-    modelPercentage?: number;
-    agencyPercentage?: number;
-    bravasCommission?: number;
+    contractType?: 'sin_pago' | 'con_pago'; // Tipo de contrato: sin pago previo o con pago previo
+    modelPercentage?: number; // Porcentaje del modelo (ej: 88)
+    agencyPercentage?: number; // Porcentaje de la agencia (ej: 12)
+    bravasCommission?: number; // Comisión de Bravas (ej: 12%)
+    advancePayment?: number; // Pago previo requerido (en centavos) - solo para contractType 'con_pago'
+    notes?: string; // Notas adicionales o términos especiales
     pdfUrl?: string; // URL del PDF en S3
     pdfDataUri?: string; // Base64 del PDF (temporal)
     contractDate?: string;
@@ -87,15 +91,23 @@ export interface MessageRecord {
     transferId?: string;
     requestingAgencyId?: string;
     requestingAgencyName?: string;
+    fromAgency?: string; // Alias de requestingAgencyName para compatibilidad con frontend
     currentAgencyId?: string;
     currentAgencyName?: string;
+    toAgency?: string; // Alias de currentAgencyName para compatibilidad con frontend
     modelId?: string;
     modelName?: string;
-    modelPhotos?: string[];
-    transferAmount?: number; // En centavos
-    bravasCommission?: number;
-    netAmount?: number;
-    transferNotes?: string;
+    modelUsername?: string; // Username del modelo para mostrar
+    modelAvatar?: string; // Avatar del modelo para mostrar
+    modelPhotos?: string[]; // Fotos del modelo (opcional)
+    transferAmount?: number; // Monto total de transferencia (en centavos)
+    requestedAmount?: number; // Alias de transferAmount para compatibilidad con frontend
+    bravasCommission?: number; // Comisión de Bravas (en centavos)
+    netAmount?: number; // Monto neto después de comisión de Bravas (en centavos)
+    modelPart?: number; // Parte del modelo después de distribuciones (en centavos)
+    agencyPart?: number; // Parte de la agencia después de distribuciones (en centavos)
+    transferNotes?: string; // Notas de la transferencia
+    notes?: string; // Alias de transferNotes para compatibilidad con frontend
     status?: 'pending' | 'accepted' | 'rejected';
   };
   

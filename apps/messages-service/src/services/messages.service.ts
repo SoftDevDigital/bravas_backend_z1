@@ -318,22 +318,51 @@ export class MessagesService {
       const response = await this.dynamoClient.send(new QueryCommand(queryParams));
       const messages = (response.Items || []) as MessageRecord[];
 
-      // Formatear mensajes
-      const formattedMessages = messages.map((msg) => ({
-        messageId: msg.messageId,
-        chatId: msg.chatId,
-        senderId: msg.senderId,
-        isFromMe: msg.senderId === userId,
-        type: msg.type,
-        content: msg.content,
-        imageUrl: msg.imageUrl,
-        price: msg.price,
-        contractData: msg.contractData,
-        transferData: msg.transferData,
-        read: msg.read,
-        readAt: msg.readAt,
-        createdAt: msg.createdAt,
-      }));
+      // Formatear mensajes y agregar alias para compatibilidad con frontend
+      const formattedMessages = messages.map((msg) => {
+        const formatted: any = {
+          messageId: msg.messageId,
+          chatId: msg.chatId,
+          senderId: msg.senderId,
+          isFromMe: msg.senderId === userId,
+          type: msg.type,
+          content: msg.content,
+          imageUrl: msg.imageUrl,
+          price: msg.price,
+          contractData: msg.contractData,
+          transferData: msg.transferData,
+          read: msg.read,
+          readAt: msg.readAt,
+          createdAt: msg.createdAt,
+        };
+
+        // Agregar alias para contractData si existe
+        if (formatted.contractData) {
+          // contractData ya tiene notes directamente, no necesita normalización desde metadata
+          // notes ya está disponible directamente en contractData según el tipo
+        }
+
+        // Agregar alias para transferData si existe
+        if (formatted.transferData) {
+          // Agregar alias fromAgency y toAgency para compatibilidad con frontend
+          if (formatted.transferData.requestingAgencyName && !formatted.transferData.fromAgency) {
+            formatted.transferData.fromAgency = formatted.transferData.requestingAgencyName;
+          }
+          if (formatted.transferData.currentAgencyName && !formatted.transferData.toAgency) {
+            formatted.transferData.toAgency = formatted.transferData.currentAgencyName;
+          }
+          // Agregar alias notes si no existe
+          if (formatted.transferData.transferNotes && !formatted.transferData.notes) {
+            formatted.transferData.notes = formatted.transferData.transferNotes;
+          }
+          // Agregar alias requestedAmount si no existe
+          if (formatted.transferData.transferAmount && !formatted.transferData.requestedAmount) {
+            formatted.transferData.requestedAmount = formatted.transferData.transferAmount;
+          }
+        }
+
+        return formatted;
+      });
 
       // Marcar mensajes como leídos
       await this.markMessagesAsRead(chatId, userId, messages.filter((m) => !m.read && m.senderId !== userId).map((m) => m.messageId));
@@ -388,6 +417,23 @@ export class MessagesService {
       const now = Date.now();
       const messageId = `msg_${now}_${uuidv4().substring(0, 8)}`;
       
+      // Normalizar contractData para incluir alias si es necesario
+      // contractData ya tiene todos los campos necesarios, incluyendo notes directamente
+      let normalizedContractData = createMessageDto.contractData;
+
+      // Normalizar transferData para incluir alias si es necesario
+      let normalizedTransferData = createMessageDto.transferData;
+      if (normalizedTransferData) {
+        normalizedTransferData = {
+          ...normalizedTransferData,
+          // Agregar alias fromAgency y toAgency para compatibilidad con frontend
+          fromAgency: normalizedTransferData.fromAgency || normalizedTransferData.requestingAgencyName,
+          toAgency: normalizedTransferData.toAgency || normalizedTransferData.currentAgencyName,
+          requestedAmount: normalizedTransferData.requestedAmount || normalizedTransferData.transferAmount,
+          notes: normalizedTransferData.notes || normalizedTransferData.transferNotes,
+        };
+      }
+      
       const message: MessageRecord = {
         messageId,
         createdAt: new Date().toISOString(),
@@ -397,8 +443,8 @@ export class MessagesService {
         content: createMessageDto.content,
         imageUrl: createMessageDto.imageUrl,
         price: createMessageDto.price,
-        contractData: createMessageDto.contractData,
-        transferData: createMessageDto.transferData,
+        contractData: normalizedContractData,
+        transferData: normalizedTransferData,
         read: false,
         createdAtTimestamp: now,
         updatedAtTimestamp: now,
@@ -645,6 +691,113 @@ export class MessagesService {
         error: error.message,
       });
       // No lanzar error, es una operación no crítica
+    }
+  }
+
+  /**
+   * Marcar todos los mensajes de un chat como leídos
+   */
+  async markAllChatMessagesAsRead(chatId: string, userId: string): Promise<{ count: number }> {
+    try {
+      // Verificar que el usuario tiene acceso al chat
+      const chat = await this.dynamoClient.send(
+        new GetCommand({
+          TableName: this.chatsTable,
+          Key: { chatId },
+        }),
+      );
+
+      if (!chat.Item) {
+        throw new NotFoundException('Chat no encontrado');
+      }
+
+      const chatRecord = chat.Item as ChatRecord;
+      if (chatRecord.participant1Id !== userId && chatRecord.participant2Id !== userId) {
+        throw new ForbiddenException('No tienes acceso a este chat');
+      }
+
+      // Obtener todos los mensajes no leídos del chat donde el usuario NO es el remitente
+      // Usar paginación para obtener todos los mensajes no leídos
+      let allUnreadMessages: MessageRecord[] = [];
+      let lastEvaluatedKey: any = undefined;
+
+      do {
+        const queryParams: any = {
+          TableName: this.messagesTable,
+          IndexName: 'chatId-createdAt-index',
+          KeyConditionExpression: 'chatId = :chatId',
+          FilterExpression: '#read = :read AND senderId <> :userId',
+          ExpressionAttributeNames: {
+            '#read': 'read',
+          },
+          ExpressionAttributeValues: {
+            ':chatId': chatId,
+            ':read': false,
+            ':userId': userId,
+          },
+          ScanIndexForward: false,
+        };
+
+        if (lastEvaluatedKey) {
+          queryParams.ExclusiveStartKey = lastEvaluatedKey;
+        }
+
+        const response = await this.dynamoClient.send(new QueryCommand(queryParams));
+        const messages = (response.Items || []) as MessageRecord[];
+        allUnreadMessages = allUnreadMessages.concat(messages);
+        lastEvaluatedKey = response.LastEvaluatedKey;
+      } while (lastEvaluatedKey);
+
+      if (allUnreadMessages.length === 0) {
+        // Ya no hay mensajes no leídos, pero aún así actualizar el contador
+        const participantNum = getParticipantNumber(chatId, userId);
+        const now = Date.now();
+        const updateExpression: string[] = ['SET updatedAtTimestamp = :updatedAt'];
+        const expressionAttributeValues: any = {
+          ':updatedAt': now,
+        };
+
+        if (participantNum === 1) {
+          updateExpression.push('unreadCount1 = :zero');
+          expressionAttributeValues[':zero'] = 0;
+        } else {
+          updateExpression.push('unreadCount2 = :zero');
+          expressionAttributeValues[':zero'] = 0;
+        }
+
+        await this.dynamoClient.send(
+          new UpdateCommand({
+            TableName: this.chatsTable,
+            Key: { chatId },
+            UpdateExpression: updateExpression.join(', '),
+            ExpressionAttributeValues: expressionAttributeValues,
+          }),
+        );
+
+        return { count: 0 };
+      }
+
+      // Marcar todos los mensajes no leídos como leídos
+      const messageIds = allUnreadMessages.map((m) => m.messageId);
+      await this.markMessagesAsRead(chatId, userId, messageIds);
+
+      this.logger.log('Todos los mensajes del chat marcados como leídos', 'markAllChatMessagesAsRead', {
+        chatId,
+        userId,
+        count: allUnreadMessages.length,
+      });
+
+      return { count: allUnreadMessages.length };
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) {
+        throw error;
+      }
+      this.logger.error('Error al marcar todos los mensajes como leídos', error?.stack, 'markAllChatMessagesAsRead', {
+        chatId,
+        userId,
+        error: error.message,
+      });
+      throw new BadRequestException(`Error al marcar todos los mensajes como leídos: ${error.message}`);
     }
   }
 
@@ -1115,6 +1268,17 @@ export class MessagesService {
         if (!createMessageDto.contractData.modelId || !createMessageDto.contractData.agencyId) {
           throw new BadRequestException('modelId y agencyId son requeridos en contractData');
         }
+        if (!createMessageDto.contractData.modelName) {
+          throw new BadRequestException('modelName es requerido en contractData');
+        }
+        if (!createMessageDto.contractData.contractType || 
+            !['sin_pago', 'con_pago'].includes(createMessageDto.contractData.contractType)) {
+          throw new BadRequestException('contractType debe ser "sin_pago" o "con_pago"');
+        }
+        if (createMessageDto.contractData.contractType === 'con_pago' && !createMessageDto.contractData.advancePayment) {
+          throw new BadRequestException('advancePayment es requerido cuando contractType es "con_pago"');
+        }
+        // contractData ya tiene notes directamente, no necesita normalización
         break;
       
       case 'agency_transfer_request':
@@ -1124,6 +1288,22 @@ export class MessagesService {
         }
         if (!createMessageDto.transferData.modelId || !createMessageDto.transferData.transferAmount) {
           throw new BadRequestException('modelId y transferAmount son requeridos en transferData');
+        }
+        if (!createMessageDto.transferData.modelName) {
+          throw new BadRequestException('modelName es requerido en transferData');
+        }
+        // Agregar alias para compatibilidad con frontend
+        if (createMessageDto.transferData.requestingAgencyName && !createMessageDto.transferData.fromAgency) {
+          createMessageDto.transferData.fromAgency = createMessageDto.transferData.requestingAgencyName;
+        }
+        if (createMessageDto.transferData.currentAgencyName && !createMessageDto.transferData.toAgency) {
+          createMessageDto.transferData.toAgency = createMessageDto.transferData.currentAgencyName;
+        }
+        if (createMessageDto.transferData.transferAmount && !createMessageDto.transferData.requestedAmount) {
+          createMessageDto.transferData.requestedAmount = createMessageDto.transferData.transferAmount;
+        }
+        if (createMessageDto.transferData.transferNotes && !createMessageDto.transferData.notes) {
+          createMessageDto.transferData.notes = createMessageDto.transferData.transferNotes;
         }
         break;
     }

@@ -243,6 +243,21 @@ export class MessagesController {
         duration: `${duration}ms`,
       });
 
+      // Normalizar contractData y transferData para incluir alias si es necesario
+      // contractData ya tiene todos los campos necesarios, incluyendo notes directamente
+      let contractData = message.contractData;
+
+      let transferData = message.transferData;
+      if (transferData) {
+        transferData = {
+          ...transferData,
+          fromAgency: transferData.fromAgency || transferData.requestingAgencyName,
+          toAgency: transferData.toAgency || transferData.currentAgencyName,
+          requestedAmount: transferData.requestedAmount || transferData.transferAmount,
+          notes: transferData.notes || transferData.transferNotes,
+        };
+      }
+
       return {
         success: true,
         data: {
@@ -254,8 +269,8 @@ export class MessagesController {
           content: message.content,
           imageUrl: message.imageUrl,
           price: message.price,
-          contractData: message.contractData,
-          transferData: message.transferData,
+          contractData,
+          transferData,
           read: message.read,
           createdAt: message.createdAt,
         },
@@ -508,6 +523,122 @@ export class MessagesController {
       this.logger.error('Error al eliminar mensaje', error?.stack, 'deleteMessage', {
         messageId,
         error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * PUT /messages/chats/:chatId/read
+   * Marcar todos los mensajes de un chat como leídos
+   */
+  @Put('chats/:chatId/read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '✅ Marcar todos los mensajes del chat como leídos',
+    description: `
+**¿Para qué sirve?**
+Marca todos los mensajes no leídos de un chat específico como leídos y actualiza el contador de no leídos del chat.
+
+**Casos de uso:**
+- Usuario abre un chat y quiere marcar todos los mensajes como leídos de una vez
+- Limpiar notificaciones de un chat específico
+- Actualizar el contador de no leídos del chat a cero
+
+**Restricciones:**
+- Solo puedes marcar como leídos los mensajes de chats a los que tienes acceso
+- Solo se marcan como leídos los mensajes que NO fueron enviados por ti
+- El chat debe existir y el usuario debe ser participante
+
+**Ejemplo de uso:**
+\`\`\`
+PUT /api/v1/messages/chats/chat_123456/read
+Authorization: Bearer {token}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "message": "15 mensajes marcados como leídos exitosamente",
+  "data": {
+    "chatId": "chat_123456",
+    "count": 15
+  }
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({
+    name: 'chatId',
+    description: 'ID único del chat',
+    example: 'chat_123456',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Todos los mensajes del chat marcados como leídos exitosamente',
+    type: ApiResponseDto,
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: '15 mensaje(s) marcado(s) como leído(s) exitosamente' },
+        data: {
+          type: 'object',
+          properties: {
+            chatId: { type: 'string', example: 'chat_123456' },
+            count: { type: 'number', example: 15 },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: '❌ No autenticado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ No tienes acceso a este chat',
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Chat no encontrado',
+  })
+  async markAllChatMessagesAsRead(@Request() req: any, @Param('chatId') chatId: string) {
+    const startTime = Date.now();
+    try {
+      const userInfo = await getUserFromToken(req.token);
+      const result = await this.messagesService.markAllChatMessagesAsRead(chatId, userInfo.userId);
+
+      const duration = Date.now() - startTime;
+      this.logger.log('Todos los mensajes del chat marcados como leídos', 'markAllChatMessagesAsRead', {
+        chatId,
+        userId: userInfo.userId,
+        count: result.count,
+        duration: `${duration}ms`,
+      });
+
+      return {
+        success: true,
+        message: result.count > 0 
+          ? `${result.count} mensaje(s) marcado(s) como leído(s) exitosamente`
+          : 'No hay mensajes no leídos en este chat',
+        data: {
+          chatId,
+          count: result.count,
+        },
+      };
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) {
+        throw error;
+      }
+      this.logger.error('Error al marcar todos los mensajes como leídos', error?.stack, 'markAllChatMessagesAsRead', {
+        chatId,
+        error: error.message,
+        duration: `${duration}ms`,
       });
       throw error;
     }

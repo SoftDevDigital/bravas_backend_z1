@@ -17,6 +17,7 @@ import {
   ListUsersCommand,
   ConfirmSignUpCommand,
   ResendConfirmationCodeCommand,
+  ChangePasswordCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { AWSClientFactory, calculateSecretHash, validateAge, loadCredentials } from '@bravas/shared';
@@ -25,6 +26,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh.dto';
 import { VerifyOTPDto } from './dto/verify-otp.dto';
 import { ResendOTPDto } from './dto/resend-otp.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { SessionsService } from './sessions.service';
 import { randomUUID } from 'crypto';
 
@@ -664,6 +666,57 @@ export class AuthService {
       throw new InternalServerErrorException(
         `Error al reenviar el código OTP: ${error.message || 'Error desconocido'}`,
       );
+    }
+  }
+
+  /**
+   * Cambiar contraseña del usuario autenticado
+   * Requiere contraseña actual y nueva contraseña
+   * El usuario debe estar autenticado (accessToken válido)
+   */
+  async changePassword(accessToken: string, changePasswordDto: ChangePasswordDto) {
+    try {
+      // Verificar que el usuario está autenticado obteniendo su información
+      const userInfo = await this.getMe(accessToken);
+      if (!userInfo.data?.email) {
+        throw new UnauthorizedException('Token inválido o expirado');
+      }
+
+      // Cambiar contraseña en Cognito
+      const changePasswordCommand = new ChangePasswordCommand({
+        AccessToken: accessToken,
+        PreviousPassword: changePasswordDto.currentPassword,
+        ProposedPassword: changePasswordDto.newPassword,
+      });
+
+      await this.cognitoClient.send(changePasswordCommand);
+
+      return {
+        success: true,
+        message: 'Contraseña cambiada exitosamente',
+        email: userInfo.data.email,
+      };
+    } catch (error: any) {
+      if (error.name === 'NotAuthorizedException' || error.name === 'UnauthorizedException') {
+        if (error.message?.includes('Incorrect username or password') || 
+            error.message?.includes('Incorrect password') ||
+            error.message?.includes('incorrecta')) {
+          throw new UnauthorizedException('La contraseña actual es incorrecta');
+        }
+        throw new UnauthorizedException('Token inválido o expirado. Por favor, inicia sesión nuevamente.');
+      }
+      if (error.name === 'InvalidPasswordException') {
+        throw new BadRequestException(
+          'La nueva contraseña no cumple con los requisitos. Debe tener al menos 8 caracteres, incluir mayúsculas, minúsculas y números.'
+        );
+      }
+      if (error.name === 'InvalidParameterException') {
+        throw new BadRequestException('La nueva contraseña no puede ser igual a la contraseña actual');
+      }
+      if (error instanceof BadRequestException || error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new BadRequestException(`Error al cambiar contraseña: ${error.message || 'Error desconocido'}`);
     }
   }
 }

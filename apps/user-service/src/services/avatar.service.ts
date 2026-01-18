@@ -210,6 +210,7 @@ export class AvatarService {
         Body: buffer,
         ContentType: contentType,
         CacheControl: 'public, max-age=31536000, immutable',
+        // ACL removido - usar política de bucket para acceso público
         Metadata: {
           uploadedAt: new Date().toISOString(),
         },
@@ -219,23 +220,20 @@ export class AvatarService {
 
   /**
    * Obtener URL pública del archivo
-   * En producción, usar CloudFront. Por ahora, pre-signed URL con expiración larga
+   * Como el bucket tiene acceso público configurado, usamos URL pública directa
+   * En producción, usar CloudFront URL directamente
    */
-  private async getPublicUrl(key: string, expiresIn: number = 31536000): Promise<string> {
+  private getPublicUrl(key: string): string {
     const bucket = this.credentials.s3.avatarsBucket;
+    const region = this.credentials.aws.region;
     
     if (!bucket) {
       throw new InternalServerErrorException('Bucket de avatares no configurado');
     }
 
-    // En producción, usar CloudFront URL directamente
-    // Por ahora, generar pre-signed URL con expiración larga
-    const command = new GetObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    });
-
-    return await getSignedUrl(this.s3Client, command, { expiresIn });
+    // URL pública directa (el bucket tiene acceso público configurado)
+    // Formato: https://{bucket}.s3.{region}.amazonaws.com/{key}
+    return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
   }
 
   /**
