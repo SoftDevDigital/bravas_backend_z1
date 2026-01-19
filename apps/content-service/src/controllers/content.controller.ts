@@ -34,7 +34,7 @@ import { S3Service } from '../services/s3.service';
 import { CreatePostDto } from '../dto/create-post.dto';
 import { CreatePackDto } from '../dto/create-pack.dto';
 import { CreateCommentDto } from '../dto/like.dto';
-import { ApiResponseDto, PostDto, PackDto } from '../dto/response.dto';
+import { ApiResponseDto, PostDto, PackDto, PostLikeDto } from '../dto/response.dto';
 import { getUserFromToken } from '../helpers/auth.helper';
 import { LoggerService } from '../common/logger/logger.service';
 import { ConfigService } from '@nestjs/config';
@@ -635,16 +635,22 @@ Authorization: Bearer {token}
   "data": [
     {
       "userId": "user_123",
-      "userRole": "user",
+      "userRole": "buyer",
       "fullName": "Juan Pérez",
-      "avatarUrl": "https://..."
+      "avatarUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/user_123/avatar.jpg"
+    },
+    {
+      "userId": "model_456",
+      "userRole": "model",
+      "fullName": "Ana Martínez",
+      "avatarUrl": "https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/model_456/avatar.jpg"
     }
   ],
   "pagination": {
     "page": 1,
     "limit": 20,
     "total": 25,
-    "hasMore": true
+    "totalPages": 2
   }
 }
 \`\`\`
@@ -673,6 +679,33 @@ Authorization: Bearer {token}
   @ApiResponse({
     status: 200,
     description: '✅ Lista de likes obtenida exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              userId: { type: 'string', example: 'user_123' },
+              userRole: { type: 'string', enum: ['buyer', 'model', 'agency'], example: 'buyer' },
+              fullName: { type: 'string', example: 'Juan Pérez' },
+              avatarUrl: { type: 'string', nullable: true, example: 'https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/user_123/avatar.jpg' },
+            },
+          },
+        },
+        pagination: {
+          type: 'object',
+          properties: {
+            page: { type: 'number', example: 1 },
+            limit: { type: 'number', example: 20 },
+            total: { type: 'number', example: 25 },
+            totalPages: { type: 'number', example: 2 },
+          },
+        },
+      },
+    },
   })
   @ApiResponse({
     status: 404,
@@ -1001,7 +1034,40 @@ Authorization: Bearer {token}
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Crear un nuevo pack',
-    description: 'Crea un pack de contenido (solo modelos).',
+    description: `
+**¿Para qué sirve?**
+Crea un pack de contenido premium que los usuarios pueden comprar.
+
+**Casos de uso:**
+- Crear packs de contenido exclusivo
+- Establecer precios para contenido premium
+- Organizar contenido en packs temáticos
+
+**Restricciones:**
+- Solo disponible para usuarios con rol MODEL
+- El precio debe ser mínimo $1.00 (en dólares)
+- Se debe subir primero una imagen de portada usando POST /content/packs/upload
+
+**Campos importantes:**
+- \`price\`: Precio en dólares (ej: 35.00 = $35.00)
+- \`imageUrl\` y \`imageKey\`: Obtenidos del endpoint POST /content/packs/upload
+- \`contentUrls\` y \`contentKeys\`: Opcionales al crear, se pueden agregar después con POST /content/packs/:packId/content
+
+**Ejemplo de uso:**
+\`\`\`
+POST /content/packs
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "name": "Pack Premium",
+  "description": "Contenido exclusivo y premium",
+  "price": 49.99,
+  "imageUrl": "https://bravas-content-dev-663134816305.s3.us-east-1.amazonaws.com/packs/model_123/image.jpg",
+  "imageKey": "packs/model_123/image.jpg"
+}
+\`\`\`
+    `.trim(),
   })
   @ApiResponse({
     status: 201,
@@ -1176,14 +1242,21 @@ Authorization: Bearer {token}
     "items": [
       {
         "id": "pack_123",
+        "packId": "pack_123",
         "modelId": "model_456",
         "modelName": "Ana Martínez",
-        "title": "Pack Premium",
+        "name": "Pack Premium",
         "description": "Contenido exclusivo",
         "price": 49.99,
-        "imageUrl": "https://...",
-        "purchasedAt": "2024-01-20T15:30:00Z",
-        "status": "purchased"
+        "imageUrl": "https://bravas-content-dev-663134816305.s3.us-east-1.amazonaws.com/packs/model_456/pack_123.jpg",
+        "contentUrls": [
+          "https://bravas-content-dev-663134816305.s3.us-east-1.amazonaws.com/packs/model_456/pack_123/content1.jpg",
+          "https://bravas-content-dev-663134816305.s3.us-east-1.amazonaws.com/packs/model_456/pack_123/video1.mp4"
+        ],
+        "salesCount": 10,
+        "totalRevenue": 499.90,
+        "status": "active",
+        "createdAt": "2024-01-20T15:30:00Z"
       }
     ],
     "pagination": {
@@ -1317,7 +1390,39 @@ Authorization: Bearer {token}
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Actualizar pack',
-    description: 'Actualiza un pack existente (solo el propietario puede editar).',
+    description: `
+**¿Para qué sirve?**
+Actualiza los detalles de un pack existente (nombre, descripción, precio).
+
+**Casos de uso:**
+- Cambiar el precio de un pack
+- Actualizar descripción o nombre
+- Modificar información del pack
+
+**Restricciones:**
+- Solo disponible para usuarios con rol MODEL
+- Solo el propietario del pack puede editarlo
+- El precio debe ser mínimo $1.00 (en dólares)
+- No se puede cambiar el contenido (imágenes/videos) con este endpoint (usar POST /content/packs/:packId/content)
+
+**Campos actualizables:**
+- \`name\`: Nombre del pack
+- \`description\`: Descripción del pack
+- \`price\`: Precio en dólares (ej: 59.99 = $59.99)
+
+**Ejemplo de uso:**
+\`\`\`
+PUT /content/packs/pack_123
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "name": "Pack Premium Actualizado",
+  "description": "Nueva descripción",
+  "price": 59.99
+}
+\`\`\`
+    `.trim(),
   })
   @ApiParam({ name: 'packId', description: 'ID del pack' })
   @ApiResponse({
@@ -1568,7 +1673,48 @@ Sube múltiples imágenes y videos a un pack existente. Este es el endpoint prin
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Comprar pack',
-    description: 'Compra un pack de contenido (integración con payment-service).',
+    description: `
+**¿Para qué sirve?**
+Inicia el proceso de compra de un pack de contenido. Integra con el payment-service para procesar el pago.
+
+**Casos de uso:**
+- Comprar packs de contenido premium
+- Acceder a contenido exclusivo de modelos
+- Procesar pagos de packs
+
+**Restricciones:**
+- Solo disponible para usuarios con rol USER (buyer)
+- El pack debe estar activo
+- El precio se procesa en dólares
+
+**Ejemplo de uso:**
+\`\`\`
+POST /content/packs/pack_123/purchase
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "paymentMethod": "stripe"
+}
+\`\`\`
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "pack": {
+      "id": "pack_123",
+      "name": "Pack Premium",
+      "price": 49.99,
+      ...
+    },
+    "paymentId": "payment_456"
+  },
+  "message": "Pack comprado exitosamente"
+}
+\`\`\`
+    `.trim(),
   })
   @ApiParam({ name: 'packId', description: 'ID del pack a comprar' })
   @ApiBody({

@@ -93,7 +93,7 @@ export class PackDto {
   @ApiProperty({ description: 'URL de la imagen de portada en S3' })
   imageUrl: string;
 
-  @ApiPropertyOptional({ description: 'URLs del contenido del pack', type: [String] })
+  @ApiPropertyOptional({ description: 'URLs del contenido del pack (imágenes y videos)', type: [String] })
   contentUrls?: string[];
 
   @ApiProperty({ description: 'Número de ventas', example: 0 })
@@ -107,6 +107,27 @@ export class PackDto {
 
   @ApiProperty({ description: 'Fecha de creación (ISO string)' })
   createdAt: string;
+}
+
+export class PostLikeDto {
+  @ApiProperty({ description: 'ID del usuario que dio like' })
+  userId: string;
+
+  @ApiProperty({ 
+    description: 'Rol del usuario que dio like', 
+    enum: ['buyer', 'model', 'agency'],
+    example: 'buyer'
+  })
+  userRole: 'buyer' | 'model' | 'agency';
+
+  @ApiProperty({ description: 'Nombre completo del usuario', example: 'Juan Pérez' })
+  fullName: string;
+
+  @ApiPropertyOptional({ 
+    description: 'URL del avatar del usuario',
+    example: 'https://bravas-avatars-dev-663134816305.s3.us-east-1.amazonaws.com/avatars/user_123/avatar.jpg'
+  })
+  avatarUrl?: string | null;
 }
 
 
