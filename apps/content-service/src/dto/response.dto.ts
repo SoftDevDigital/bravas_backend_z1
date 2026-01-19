@@ -87,7 +87,7 @@ export class PackDto {
   @ApiPropertyOptional({ description: 'Descripción del pack' })
   description?: string;
 
-  @ApiProperty({ description: 'Precio en centavos', example: 3500 })
+  @ApiProperty({ description: 'Precio en dólares', example: 35.00 })
   price: number;
 
   @ApiProperty({ description: 'URL de la imagen de portada en S3' })
@@ -99,7 +99,7 @@ export class PackDto {
   @ApiProperty({ description: 'Número de ventas', example: 0 })
   salesCount: number;
 
-  @ApiProperty({ description: 'Ingresos totales en centavos', example: 0 })
+  @ApiProperty({ description: 'Ingresos totales en dólares', example: 0 })
   totalRevenue: number;
 
   @ApiProperty({ description: 'Estado del pack', enum: ['active', 'deleted', 'hidden'] })

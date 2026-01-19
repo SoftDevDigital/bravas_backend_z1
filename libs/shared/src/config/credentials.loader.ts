@@ -64,11 +64,36 @@ export function loadCredentials(environment: string = 'dev'): Credentials {
   };
   const normalizedEnv = envMap[env] || env;
 
-  // Intentar cargar desde variables de entorno primero
-  const envCredentials = loadFromEnvironment();
+  // En desarrollo local, SIEMPRE priorizar archivo JSON sobre variables de entorno
+  // para evitar conflictos con credenciales de AWS CLI locales o .env.dev
+  const isLocalDev = normalizedEnv === 'dev' || normalizedEnv === 'development';
   
-  // Cargar archivo JSON para tener fallbacks
+  // Cargar archivo JSON primero
   const fileCredentials = loadFromFile(normalizedEnv);
+  
+  // Si estamos en desarrollo local, SIEMPRE usar el archivo JSON (ignorar variables de entorno de AWS)
+  if (isLocalDev) {
+    console.log('🔐 [loadCredentials] ========================================');
+    console.log('🔐 [loadCredentials] MODO DESARROLLO LOCAL');
+    console.log('🔐 [loadCredentials] Forzando uso de credenciales del archivo JSON');
+    console.log('🔐 [loadCredentials] Account ID:', fileCredentials.aws.accountId || 'NO CONFIGURADO');
+    console.log('🔐 [loadCredentials] Region:', fileCredentials.aws.region || 'NO CONFIGURADO');
+    console.log('🔐 [loadCredentials] AccessKeyId:', fileCredentials.aws.accessKeyId ? '✅ CONFIGURADO' : '❌ NO CONFIGURADO');
+    console.log('🔐 [loadCredentials] SecretAccessKey:', fileCredentials.aws.secretAccessKey ? '✅ CONFIGURADO' : '❌ NO CONFIGURADO');
+    
+    // Si el archivo JSON tiene credenciales, usarlas directamente (IGNORAR variables de entorno)
+    if (fileCredentials.aws.accessKeyId && fileCredentials.aws.secretAccessKey) {
+      console.log('🔐 [loadCredentials] ✅ Usando credenciales del archivo JSON (ignorando variables de entorno)');
+      console.log('🔐 [loadCredentials] ========================================');
+      return fileCredentials;
+    } else {
+      console.warn('⚠️  [loadCredentials] El archivo JSON no tiene credenciales de AWS completas');
+      console.log('🔐 [loadCredentials] ========================================');
+    }
+  }
+  
+  // Intentar cargar desde variables de entorno (solo si no estamos en desarrollo local o el JSON no tiene credenciales)
+  const envCredentials = loadFromEnvironment();
   
   if (envCredentials) {
     // Si tenemos credenciales de entorno, combinarlas con el archivo JSON
@@ -83,6 +108,8 @@ export function loadCredentials(environment: string = 'dev'): Credentials {
         modelAgencyRelationsTable: envCredentials.dynamodb.modelAgencyRelationsTable || fileCredentials.dynamodb.modelAgencyRelationsTable,
         agencyAgencyRelationsTable: envCredentials.dynamodb.agencyAgencyRelationsTable || fileCredentials.dynamodb.agencyAgencyRelationsTable,
         userModelRelationsTable: envCredentials.dynamodb.userModelRelationsTable || fileCredentials.dynamodb.userModelRelationsTable,
+        postsTable: envCredentials.dynamodb.postsTable || fileCredentials.dynamodb.postsTable,
+        packsTable: envCredentials.dynamodb.packsTable || fileCredentials.dynamodb.packsTable,
       },
     };
   }
@@ -123,6 +150,10 @@ export function loadCredentials(environment: string = 'dev'): Credentials {
       agencyAgencyRelationsTable: envDynamoDBTables.agencyAgencyRelationsTable || fileCredentials.dynamodb.agencyAgencyRelationsTable,
       userModelRelationsTable: envDynamoDBTables.userModelRelationsTable || fileCredentials.dynamodb.userModelRelationsTable,
       userFollowsTable: envDynamoDBTables.userFollowsTable || fileCredentials.dynamodb.userFollowsTable,
+      postsTable: process.env.DYNAMODB_POSTS_TABLE || fileCredentials.dynamodb.postsTable,
+      packsTable: process.env.DYNAMODB_PACKS_TABLE || fileCredentials.dynamodb.packsTable,
+      postLikesTable: process.env.DYNAMODB_POST_LIKES_TABLE || fileCredentials.dynamodb.postLikesTable,
+      postCommentsTable: process.env.DYNAMODB_POST_COMMENTS_TABLE || fileCredentials.dynamodb.postCommentsTable,
     },
   };
   
@@ -374,14 +405,26 @@ export function getCredentials(): Credentials {
  * Helper para obtener solo las credenciales de AWS
  */
 export function getAWSCredentials(credentials?: Credentials) {
+  console.log('🔑 [getAWSCredentials] Obteniendo credenciales de AWS...');
   const creds = credentials || getCredentials();
-  return {
+  console.log('🔑 [getAWSCredentials] Credenciales obtenidas:', {
+    region: creds.aws.region,
+    accountId: creds.aws.accountId,
+    hasAccessKeyId: !!creds.aws.accessKeyId,
+    hasSecretAccessKey: !!creds.aws.secretAccessKey,
+    accessKeyIdPreview: creds.aws.accessKeyId ? `${creds.aws.accessKeyId.substring(0, 8)}...` : 'NO CONFIGURADO',
+  });
+  
+  const result = {
     region: creds.aws.region,
     credentials: {
       accessKeyId: creds.aws.accessKeyId,
       secretAccessKey: creds.aws.secretAccessKey,
     },
   };
+  
+  console.log('🔑 [getAWSCredentials] Retornando configuración AWS');
+  return result;
 }
 
 /**

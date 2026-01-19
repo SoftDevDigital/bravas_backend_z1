@@ -22,13 +22,13 @@ export class CreatePackDto {
   description?: string;
 
   @ApiProperty({
-    description: 'Precio del pack en centavos (ej: 3500 = $35.00)',
-    example: 3500,
-    minimum: 100, // Mínimo $1.00
+    description: 'Precio del pack en dólares (ej: 35.00 = $35.00)',
+    example: 35.00,
+    minimum: 1.00, // Mínimo $1.00
   })
   @IsNumber()
-  @Min(100, { message: 'El precio mínimo es $1.00 (100 centavos)' })
-  price: number;
+  @Min(1.00, { message: 'El precio mínimo es $1.00' })
+  price: number; // Precio en dólares
 
   @ApiProperty({
     description: 'URL de la imagen de portada en S3',

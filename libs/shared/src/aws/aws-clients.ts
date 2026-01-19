@@ -53,12 +53,27 @@ export class AWSClientFactory {
   static createDynamoDBClient(
     config?: Partial<DynamoDBClientConfig>
   ): DynamoDBClient {
+    console.log('🔧 [AWSClientFactory] Creando DynamoDB Client...');
     const awsConfig = getAWSCredentials();
-    return new DynamoDBClient({
+    console.log('🔧 [AWSClientFactory] getAWSCredentials() retornó:', {
+      region: awsConfig.region,
+      hasCredentials: !!(awsConfig.credentials?.accessKeyId && awsConfig.credentials?.secretAccessKey),
+    });
+    
+    const clientConfig = {
       region: awsConfig.region,
       credentials: awsConfig.credentials,
       ...config,
+    };
+    
+    console.log('🔧 [AWSClientFactory] Configuración del cliente DynamoDB:', {
+      region: clientConfig.region,
+      hasCredentials: !!clientConfig.credentials,
     });
+    
+    const client = new DynamoDBClient(clientConfig);
+    console.log('🔧 [AWSClientFactory] DynamoDB Client creado exitosamente');
+    return client;
   }
 
   /**
@@ -67,13 +82,25 @@ export class AWSClientFactory {
   static createDynamoDBDocumentClient(
     config?: Parameters<typeof DynamoDBDocumentClient.from>[1]
   ): DynamoDBDocumentClient {
+    console.log('🔧 [AWSClientFactory] Creando DynamoDB Document Client...');
+    const awsConfig = getAWSCredentials();
+    console.log('🔧 [AWSClientFactory] Configuración AWS:', {
+      region: awsConfig.region,
+      hasCredentials: !!(awsConfig.credentials?.accessKeyId && awsConfig.credentials?.secretAccessKey),
+      accessKeyId: awsConfig.credentials?.accessKeyId ? `${awsConfig.credentials.accessKeyId.substring(0, 8)}...` : 'NO CONFIGURADO',
+    });
+    
     const client = this.createDynamoDBClient();
+    console.log('🔧 [AWSClientFactory] Cliente DynamoDB base creado');
+    
     const docClient = DynamoDBDocumentClient.from(client, {
       marshallOptions: {
         removeUndefinedValues: true,
       },
       ...config,
     });
+    
+    console.log('🔧 [AWSClientFactory] DynamoDB Document Client creado exitosamente');
     // Asegurar que TypeScript reconozca el tipo correcto
     return docClient as DynamoDBDocumentClient;
   }

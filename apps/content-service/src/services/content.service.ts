@@ -41,14 +41,43 @@ export class ContentService {
     private httpService: HttpService,
   ) {
     this.credentials = loadCredentials();
+    
+    // Log detallado de credenciales
+    console.log('🔍 [ContentService] Credenciales cargadas:', {
+      accountId: this.credentials.aws.accountId,
+      region: this.credentials.aws.region,
+      accessKeyId: this.credentials.aws.accessKeyId ? '✅ CONFIGURADO' : '❌ NO CONFIGURADO',
+      secretAccessKey: this.credentials.aws.secretAccessKey ? '✅ CONFIGURADO' : '❌ NO CONFIGURADO',
+    });
+    
     this.dynamoClient = AWSClientFactory.createDynamoDBDocumentClient() as DynamoDBDocumentClient;
     this.logger = LoggerService.create('ContentService', configService);
     
     // Usar credenciales si están disponibles, sino construir dinámicamente
     const projectName = process.env.PROJECT_NAME || 'bravas';
     const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'dev';
-    this.postsTable = this.credentials.dynamodb.postsTable || `${projectName}-posts-${environment}`;
-    this.packsTable = this.credentials.dynamodb.packsTable || `${projectName}-packs-${environment}`;
+    
+    // Forzar nombres de tablas (asegurar que no sean vacíos)
+    const postsTableFromCreds = this.credentials.dynamodb.postsTable;
+    const packsTableFromCreds = this.credentials.dynamodb.packsTable;
+    
+    this.postsTable = (postsTableFromCreds && postsTableFromCreds.trim() !== '') 
+      ? postsTableFromCreds 
+      : `${projectName}-posts-${environment}`;
+    this.packsTable = (packsTableFromCreds && packsTableFromCreds.trim() !== '') 
+      ? packsTableFromCreds 
+      : `${projectName}-packs-${environment}`;
+    
+    // Log para debugging
+    console.log('🔍 [ContentService] Configuración de tablas:', {
+      postsTable: this.postsTable,
+      packsTable: this.packsTable,
+      credentialsPostsTable: postsTableFromCreds || 'undefined/vacío',
+      credentialsPacksTable: packsTableFromCreds || 'undefined/vacío',
+      projectName,
+      environment,
+      region: this.credentials.aws.region,
+    });
     
     this.userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3001/api/v1';
     this.paymentServiceUrl = this.configService.get<string>('PAYMENT_SERVICE_URL') || 'http://localhost:3002/api/v1';
@@ -59,12 +88,19 @@ export class ContentService {
    */
   async createPost(userId: string, userRole: 'buyer' | 'model' | 'agency', createPostDto: CreatePostDto): Promise<PostRecord> {
     try {
+      console.log('📝 [createPost] ========================================');
+      console.log('📝 [createPost] INICIANDO creación de post');
+      console.log('📝 [createPost] userId:', userId);
+      console.log('📝 [createPost] userRole:', userRole);
+      console.log('📝 [createPost] createPostDto:', JSON.stringify(createPostDto, null, 2));
+      
       if (!createPostDto.description && !createPostDto.imageUrl) {
         throw new BadRequestException('El post debe tener al menos texto o imagen');
       }
 
       const now = Date.now();
       const postId = generatePostId(userId, now);
+      console.log('📝 [createPost] postId generado:', postId);
 
       const post: PostRecord = {
         postId,
@@ -80,16 +116,44 @@ export class ContentService {
         createdAtTimestamp: now,
         updatedAtTimestamp: now,
       };
+      
+      console.log('📝 [createPost] Objeto post creado:', JSON.stringify(post, null, 2));
 
-      // Enriquecer con información del autor
-      await this.enrichPostWithUserInfo(post);
+      // Guardar el post primero
+      console.log('📝 [createPost] Preparando PutCommand para DynamoDB');
+      console.log('📝 [createPost] TableName:', this.postsTable);
+      console.log('📝 [createPost] Region configurada:', this.credentials.aws.region);
+      console.log('📝 [createPost] Account ID:', this.credentials.aws.accountId);
+      
+      const putCommand = new PutCommand({
+        TableName: this.postsTable,
+        Item: post,
+      });
+      
+      console.log('📝 [createPost] PutCommand creado, enviando a DynamoDB...');
+      console.log('📝 [createPost] Cliente DynamoDB configurado:', this.dynamoClient ? '✅ SÍ' : '❌ NO');
+      
+      const startTime = Date.now();
+      const result = await this.dynamoClient.send(putCommand);
+      const duration = Date.now() - startTime;
+      
+      console.log('📝 [createPost] ✅ PutCommand exitoso');
+      console.log('📝 [createPost] Duración:', duration, 'ms');
+      console.log('📝 [createPost] Resultado:', JSON.stringify(result, null, 2));
 
-      await this.dynamoClient.send(
-        new PutCommand({
-          TableName: this.postsTable,
-          Item: post,
-        }),
-      );
+      // Enriquecer con información del autor (no bloquea la creación)
+      // Se hace después de guardar para no bloquear la creación del post
+      this.enrichPostWithUserInfo(post).catch((error) => {
+        // Solo loguear el error, no lanzarlo
+        this.logger.warn('No se pudo enriquecer post con información del usuario', 'createPost', {
+          postId,
+          userId,
+          error: error.message,
+        });
+      });
+
+      console.log('📝 [createPost] Post guardado exitosamente en DynamoDB');
+      console.log('📝 [createPost] ========================================');
 
       this.logger.log('Post creado exitosamente', 'createPost', {
         postId,
@@ -98,9 +162,24 @@ export class ContentService {
 
       return post;
     } catch (error: any) {
+      console.error('❌ [createPost] ========================================');
+      console.error('❌ [createPost] ERROR al crear post');
+      console.error('❌ [createPost] Tipo de error:', error?.constructor?.name || 'Unknown');
+      console.error('❌ [createPost] Mensaje:', error?.message || 'Sin mensaje');
+      console.error('❌ [createPost] Código:', error?.code || 'Sin código');
+      console.error('❌ [createPost] Stack:', error?.stack || 'Sin stack');
+      console.error('❌ [createPost] Error completo:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      console.error('❌ [createPost] TableName usado:', this.postsTable);
+      console.error('❌ [createPost] Region:', this.credentials.aws.region);
+      console.error('❌ [createPost] Account ID:', this.credentials.aws.accountId);
+      console.error('❌ [createPost] ========================================');
+      
       this.logger.error('Error al crear post', error?.stack, 'createPost', {
         userId,
         error: error.message,
+        code: error?.code,
+        tableName: this.postsTable,
+        region: this.credentials.aws.region,
       });
       throw error;
     }
@@ -192,10 +271,16 @@ export class ContentService {
     nextCursor?: string;
   }> {
     try {
+      console.log('📰 [getPersonalizedFeed] ========================================');
+      console.log('📰 [getPersonalizedFeed] INICIANDO feed personalizado');
+      console.log('📰 [getPersonalizedFeed] userId:', userId);
+      console.log('📰 [getPersonalizedFeed] limit:', limit);
+      
       // Obtener usuarios seguidos desde user-service (pueden ser MODEL, USER o AGENCY)
       let followingUserIds: string[] = [];
       try {
-        const followTable = this.credentials.dynamodb.userFollowsTable || 'user_follows';
+        const followTable = this.credentials.dynamodb.userFollowsTable || 'bravas-user-follows-dev';
+        console.log('📰 [getPersonalizedFeed] Buscando usuarios seguidos en tabla:', followTable);
         const response = await this.dynamoClient.send(
           new QueryCommand({
             TableName: followTable,
@@ -207,59 +292,95 @@ export class ContentService {
           }),
         );
         followingUserIds = (response.Items || []).map((item) => item.modelId);
+        console.log('📰 [getPersonalizedFeed] Usuarios seguidos encontrados:', followingUserIds.length);
       } catch (error) {
-        // Si la tabla no existe o hay error, retornar feed vacío
+        // Si la tabla no existe o hay error, continuar sin usuarios seguidos
+        console.warn('⚠️  [getPersonalizedFeed] No se pudo obtener usuarios seguidos:', (error as Error).message);
         this.logger.warn('No se pudo obtener usuarios seguidos', 'getPersonalizedFeed', {
           userId,
           error: (error as Error).message,
         });
-        return { posts: [], nextCursor: undefined };
+        // NO retornar aquí, continuar para obtener posts propios
       }
 
-      if (followingUserIds.length === 0) {
-        // Si no sigue a nadie, retornar feed vacío
-        return { posts: [], nextCursor: undefined };
-      }
-
-      // Obtener posts de los usuarios seguidos (pueden ser MODEL, USER o AGENCY)
-      // Usar BatchGet o múltiples queries
+      // Siempre incluir los posts propios del usuario en el feed personalizado
+      // Además de los posts de usuarios seguidos
       const allPosts: PostRecord[] = [];
       
-      // Hacer queries en paralelo para cada usuario seguido
-      const postQueries = await Promise.all(
-        followingUserIds.map(async (followedUserId) => {
-          try {
-            const response = await this.dynamoClient.send(
-              new QueryCommand({
-                TableName: this.postsTable,
-                IndexName: 'userId-createdAt-index',
-                KeyConditionExpression: 'userId = :userId',
-                FilterExpression: '#status = :active',
-                ExpressionAttributeNames: {
-                  '#status': 'status',
-                },
-                ExpressionAttributeValues: {
-                  ':userId': followedUserId,
-                  ':active': 'active',
-                },
-                ScanIndexForward: false,
-                Limit: 50, // Obtener más posts por usuario para luego ordenar
-              }),
-            );
-            return (response.Items || []) as PostRecord[];
-          } catch (error) {
-            return [];
-          }
-        })
-      );
+      // 1. Obtener posts propios del usuario
+      console.log('📰 [getPersonalizedFeed] Obteniendo posts propios del usuario...');
+      console.log('📰 [getPersonalizedFeed] Tabla:', this.postsTable);
+      console.log('📰 [getPersonalizedFeed] Índice: userId-createdAt-index');
+      try {
+        const ownPostsResponse = await this.dynamoClient.send(
+          new QueryCommand({
+            TableName: this.postsTable,
+            IndexName: 'userId-createdAt-index',
+            KeyConditionExpression: 'userId = :userId',
+            FilterExpression: '#status = :active',
+            ExpressionAttributeNames: {
+              '#status': 'status',
+            },
+            ExpressionAttributeValues: {
+              ':userId': userId,
+              ':active': 'active',
+            },
+            ScanIndexForward: false,
+            Limit: 50,
+          }),
+        );
+        const ownPosts = (ownPostsResponse.Items || []) as PostRecord[];
+        console.log('📰 [getPersonalizedFeed] Posts propios encontrados:', ownPosts.length);
+        console.log('📰 [getPersonalizedFeed] Posts propios:', ownPosts.map(p => ({ postId: p.postId, description: p.description?.substring(0, 30) })));
+        allPosts.push(...ownPosts);
+      } catch (error) {
+        console.error('❌ [getPersonalizedFeed] Error al obtener posts propios:', (error as Error).message);
+        console.error('❌ [getPersonalizedFeed] Stack:', (error as Error).stack);
+        this.logger.warn('Error al obtener posts propios', 'getPersonalizedFeed', {
+          userId,
+          error: (error as Error).message,
+        });
+      }
+      
+      // 2. Obtener posts de los usuarios seguidos (si hay alguno)
+      if (followingUserIds.length > 0) {
+        // Hacer queries en paralelo para cada usuario seguido
+        const postQueries = await Promise.all(
+          followingUserIds.map(async (followedUserId) => {
+            try {
+              const response = await this.dynamoClient.send(
+                new QueryCommand({
+                  TableName: this.postsTable,
+                  IndexName: 'userId-createdAt-index',
+                  KeyConditionExpression: 'userId = :userId',
+                  FilterExpression: '#status = :active',
+                  ExpressionAttributeNames: {
+                    '#status': 'status',
+                  },
+                  ExpressionAttributeValues: {
+                    ':userId': followedUserId,
+                    ':active': 'active',
+                  },
+                  ScanIndexForward: false,
+                  Limit: 50, // Obtener más posts por usuario para luego ordenar
+                }),
+              );
+              return (response.Items || []) as PostRecord[];
+            } catch (error) {
+              return [];
+            }
+          })
+        );
 
-      // Combinar todos los posts
-      postQueries.forEach((userPosts) => {
-        allPosts.push(...userPosts);
-      });
+        // Combinar todos los posts de usuarios seguidos
+        postQueries.forEach((userPosts) => {
+          allPosts.push(...userPosts);
+        });
+      }
 
       // Ordenar por fecha (más recientes primero)
       allPosts.sort((a, b) => b.createdAtTimestamp - a.createdAtTimestamp);
+      console.log('📰 [getPersonalizedFeed] Total de posts después de combinar:', allPosts.length);
 
       // Aplicar paginación
       let startIndex = 0;
@@ -275,6 +396,8 @@ export class ContentService {
       }
 
       const paginatedPosts = allPosts.slice(startIndex, startIndex + limit);
+      console.log('📰 [getPersonalizedFeed] Posts después de paginación:', paginatedPosts.length);
+      console.log('📰 [getPersonalizedFeed] ========================================');
 
       // Enriquecer con información de usuarios
       if (this.httpService) {
@@ -342,8 +465,12 @@ export class ContentService {
     try {
       const post = await this.getPostById(postId);
 
+      // Normalizar strings para comparación
+      const normalizedPostUserId = post.userId?.toLowerCase() || '';
+      const normalizedUserId = userId?.toLowerCase() || '';
+
       // Verificar que el usuario es el autor
-      if (post.userId !== userId) {
+      if (normalizedPostUserId !== normalizedUserId) {
         throw new ForbiddenException('No tienes permiso para editar este post');
       }
 
@@ -397,28 +524,53 @@ export class ContentService {
     try {
       const post = await this.getPostById(postId);
 
+      // Normalizar strings para comparación
+      const normalizedStatus = post.status?.toLowerCase() || '';
+      const normalizedPostUserId = post.userId?.toLowerCase() || '';
+      const normalizedUserId = userId?.toLowerCase() || '';
+
+      // Verificar que el post no esté ya eliminado
+      if (normalizedStatus === 'deleted') {
+        throw new BadRequestException('Este post ya fue eliminado');
+      }
+
       // Verificar que el usuario es el autor
-      if (post.userId !== userId) {
+      if (normalizedPostUserId !== normalizedUserId) {
         throw new ForbiddenException('No tienes permiso para eliminar este post');
       }
 
       // Eliminar imagen de S3 si existe
       if (post.imageKey) {
-        await this.s3Service.deleteImage(post.imageKey);
+        try {
+          await this.s3Service.deleteImage(post.imageKey);
+        } catch (error) {
+          // No fallar si la imagen ya no existe en S3
+          this.logger.warn('No se pudo eliminar imagen de S3 (puede que ya no exista)', 'deletePost', {
+            imageKey: post.imageKey,
+            error: (error as Error).message,
+          });
+        }
       }
 
-      // Marcar como eliminado (soft delete)
+      const now = Date.now();
+      // Calcular TTL para limpieza automática después de 30 días (opcional)
+      const ttlDays = 30;
+      const ttlTimestamp = Math.floor(now / 1000) + (ttlDays * 24 * 60 * 60);
+
+      // Marcar como eliminado (soft delete) y configurar TTL para limpieza automática
       await this.dynamoClient.send(
         new UpdateCommand({
           TableName: this.postsTable,
           Key: { postId },
-          UpdateExpression: 'SET #status = :deleted, updatedAtTimestamp = :updatedAt',
+          UpdateExpression: 'SET #status = :deleted, updatedAtTimestamp = :updatedAt, #ttl = :ttl',
           ExpressionAttributeNames: {
             '#status': 'status',
+            '#ttl': 'ttl', // Escapar palabra reservada
           },
           ExpressionAttributeValues: {
             ':deleted': 'deleted',
-            ':updatedAt': Date.now(),
+            ':updatedAt': now,
+            ':ttl': ttlTimestamp,
           },
         }),
       );
@@ -450,7 +602,7 @@ export class ContentService {
         modelId,
         name: createPackDto.name,
         description: createPackDto.description,
-        price: createPackDto.price,
+        price: createPackDto.price, // Almacenar en dólares
         imageUrl: createPackDto.imageUrl,
         imageKey: createPackDto.imageKey,
         contentUrls: createPackDto.contentUrls,
@@ -596,51 +748,64 @@ export class ContentService {
     try {
       const pack = await this.getPackById(packId);
 
+      // Normalizar strings para comparación
+      const normalizedPackModelId = pack.modelId?.toLowerCase() || '';
+      const normalizedModelId = modelId?.toLowerCase() || '';
+
       // Verificar que el usuario es el propietario
-      if (pack.modelId !== modelId) {
+      if (normalizedPackModelId !== normalizedModelId) {
         throw new ForbiddenException('No tienes permiso para editar este pack');
       }
 
       const now = Date.now();
       const updateExpressions: string[] = [];
+      const expressionAttributeNames: Record<string, string> = {};
       const expressionAttributeValues: Record<string, any> = {};
 
       if (updateDto.name !== undefined) {
-        updateExpressions.push('name = :name');
+        expressionAttributeNames['#name'] = 'name';
+        updateExpressions.push('#name = :name');
         expressionAttributeValues[':name'] = updateDto.name;
       }
 
       if (updateDto.description !== undefined) {
-        updateExpressions.push('description = :description');
+        expressionAttributeNames['#description'] = 'description';
+        updateExpressions.push('#description = :description');
         expressionAttributeValues[':description'] = updateDto.description;
       }
 
       if (updateDto.price !== undefined) {
-        updateExpressions.push('price = :price');
+        expressionAttributeNames['#price'] = 'price';
+        updateExpressions.push('#price = :price');
         expressionAttributeValues[':price'] = updateDto.price;
       }
 
       if (updateDto.imageUrl !== undefined) {
-        updateExpressions.push('imageUrl = :imageUrl');
+        expressionAttributeNames['#imageUrl'] = 'imageUrl';
+        updateExpressions.push('#imageUrl = :imageUrl');
         expressionAttributeValues[':imageUrl'] = updateDto.imageUrl;
       }
 
       if (updateDto.imageKey !== undefined) {
-        updateExpressions.push('imageKey = :imageKey');
+        expressionAttributeNames['#imageKey'] = 'imageKey';
+        updateExpressions.push('#imageKey = :imageKey');
         expressionAttributeValues[':imageKey'] = updateDto.imageKey;
       }
 
       if (updateDto.contentUrls !== undefined) {
-        updateExpressions.push('contentUrls = :contentUrls');
+        expressionAttributeNames['#contentUrls'] = 'contentUrls';
+        updateExpressions.push('#contentUrls = :contentUrls');
         expressionAttributeValues[':contentUrls'] = updateDto.contentUrls;
       }
 
       if (updateDto.contentKeys !== undefined) {
-        updateExpressions.push('contentKeys = :contentKeys');
+        expressionAttributeNames['#contentKeys'] = 'contentKeys';
+        updateExpressions.push('#contentKeys = :contentKeys');
         expressionAttributeValues[':contentKeys'] = updateDto.contentKeys;
       }
 
-      updateExpressions.push('updatedAtTimestamp = :updatedAt');
+      expressionAttributeNames['#updatedAtTimestamp'] = 'updatedAtTimestamp';
+      updateExpressions.push('#updatedAtTimestamp = :updatedAt');
       expressionAttributeValues[':updatedAt'] = now;
 
       await this.dynamoClient.send(
@@ -648,6 +813,7 @@ export class ContentService {
           TableName: this.packsTable,
           Key: { packId },
           UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+          ExpressionAttributeNames: expressionAttributeNames,
           ExpressionAttributeValues: expressionAttributeValues,
         }),
       );
@@ -670,8 +836,12 @@ export class ContentService {
     try {
       const pack = await this.getPackById(packId);
 
+      // Normalizar strings para comparación
+      const normalizedPackModelId = pack.modelId?.toLowerCase() || '';
+      const normalizedModelId = modelId?.toLowerCase() || '';
+
       // Verificar que el usuario es el propietario
-      if (pack.modelId !== modelId) {
+      if (normalizedPackModelId !== normalizedModelId) {
         throw new ForbiddenException('No tienes permiso para eliminar este pack');
       }
 
@@ -723,7 +893,9 @@ export class ContentService {
     try {
       const pack = await this.getPackById(packId);
 
-      if (pack.status !== 'active') {
+      // Normalizar string para comparación
+      const normalizedStatus = pack.status?.toLowerCase() || '';
+      if (normalizedStatus !== 'active') {
         throw new BadRequestException('Este pack no está disponible');
       }
 
@@ -867,11 +1039,11 @@ export class ContentService {
       modelAvatar: record.modelAvatar,
       name: record.name,
       description: record.description,
-      price: record.price,
+      price: record.price, // Precio en dólares
       imageUrl: record.imageUrl,
       contentUrls: record.contentUrls,
       salesCount: record.salesCount,
-      totalRevenue: record.totalRevenue,
+      totalRevenue: record.totalRevenue, // Ingresos en dólares
       status: record.status,
       createdAt: record.createdAt ? new Date(record.createdAt).toISOString() : undefined,
     };
@@ -881,17 +1053,21 @@ export class ContentService {
    * Tablas para likes y comentarios
    */
   private get likesTable(): string {
-    return this.credentials.dynamodb.postLikesTable || 'post_likes';
+    const projectName = process.env.PROJECT_NAME || 'bravas';
+    const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'dev';
+    return this.credentials.dynamodb.postLikesTable || `${projectName}-post-likes-${environment}`;
   }
 
   private get commentsTable(): string {
-    return this.credentials.dynamodb.postCommentsTable || 'post_comments';
+    const projectName = process.env.PROJECT_NAME || 'bravas';
+    const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'dev';
+    return this.credentials.dynamodb.postCommentsTable || `${projectName}-post-comments-${environment}`;
   }
 
   /**
    * Dar/quitar like a un post (toggle)
    */
-  async toggleLike(postId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
+  async toggleLike(postId: string, userId: string, userRole?: 'buyer' | 'model' | 'agency'): Promise<{ liked: boolean; likesCount: number }> {
     try {
       // Verificar que el post existe
       const post = await this.getPostById(postId);
@@ -929,6 +1105,7 @@ export class ContentService {
         const likeRecord: PostLikeRecord = {
           postId,
           userId,
+          userRole: userRole || 'buyer', // Almacenar el rol del usuario
           createdAt: new Date().toISOString(),
           createdAtTimestamp: now,
         };
@@ -1060,8 +1237,14 @@ export class ContentService {
         };
       }
 
-      // Obtener información de usuarios
-      const userIds = response.Items.map((item) => item.userId);
+      // Calcular total basado en los items de DynamoDB (antes de filtrar)
+      const totalLikes = response.Items.length;
+      
+      // Aplicar paginación ANTES de obtener información de usuarios (para eficiencia)
+      const paginatedItems = response.Items.slice(skip, skip + limit);
+      const userIds = paginatedItems.map((item) => item.userId);
+
+      // Obtener información de usuarios solo para la página actual
       const users = await Promise.all(
         userIds.map(async (userId) => {
           try {
@@ -1069,31 +1252,49 @@ export class ContentService {
               const userResponse: any = await firstValueFrom(
                 this.httpService.get(`${this.userServiceUrl}/users/${userId}`)
               );
-              return userResponse.data?.data;
+              return {
+                userId,
+                userData: userResponse.data?.data,
+              };
             }
-            return null;
+            return { userId, userData: null };
           } catch (error) {
-            return null;
+            // Si no se puede obtener información del usuario, retornar al menos el userId
+            return { userId, userData: null };
           }
         })
       );
 
-      const likes = users
-        .filter((user): user is NonNullable<typeof user> => user !== null)
-        .slice(skip, skip + limit)
-        .map((user: any) => ({
-          userId: user.id || user.userId,
-          fullName: user.fullName,
-          avatarUrl: user.avatarUrl || user.profile?.avatarUrl,
-        }));
+      // Mapear a formato de respuesta (incluir userId, rol e información del usuario)
+      const likes = users.map(({ userId, userData }, index) => {
+        // Obtener el rol desde el item de DynamoDB o desde userData
+        const likeItem = paginatedItems[index];
+        const userRole = likeItem?.userRole || userData?.role || null;
+        
+        if (userData) {
+          return {
+            userId: userData.id || userData.userId || userId,
+            userRole: userRole || userData.role || null,
+            fullName: userData.fullName || userData.name || userData.artistName || userData.agencyName || 'Usuario',
+            avatarUrl: userData.avatarUrl || userData.profile?.avatarUrl || null,
+          };
+        }
+        // Si no se pudo obtener información, retornar al menos el userId y rol
+        return {
+          userId,
+          userRole: userRole || null,
+          fullName: 'Usuario',
+          avatarUrl: null,
+        };
+      });
 
       return {
         likes,
         pagination: {
           page,
           limit,
-          total: userIds.length,
-          totalPages: Math.ceil(userIds.length / limit),
+          total: totalLikes,
+          totalPages: Math.ceil(totalLikes / limit),
         },
       };
     } catch (error: any) {
@@ -1123,7 +1324,9 @@ export class ContentService {
       // Verificar que el post existe
       const post = await this.getPostById(postId);
 
-      if (post.status !== 'active') {
+      // Normalizar string para comparación
+      const normalizedStatus = post.status?.toLowerCase() || '';
+      if (normalizedStatus !== 'active') {
         throw new BadRequestException('No puedes comentar en este post');
       }
 
@@ -1320,10 +1523,11 @@ export class ContentService {
           };
         }
         
-        // Filtrar pagos de packs
-        const packPayments = payments.filter((payment: any) => 
-          payment.metadata?.packId || payment.metadata?.type === 'pack_purchase'
-        );
+        // Filtrar pagos de packs (normalizar comparación de tipo)
+        const packPayments = payments.filter((payment: any) => {
+          const normalizedType = payment.metadata?.type?.toLowerCase() || '';
+          return payment.metadata?.packId || normalizedType === 'pack_purchase';
+        });
 
         if (packPayments.length === 0) {
           return {
@@ -1346,7 +1550,9 @@ export class ContentService {
         for (const packId of packIds) {
           try {
             const pack = await this.getPackById(packId);
-            if (pack && pack.status === 'active') {
+            // Normalizar string para comparación
+            const normalizedStatus = pack?.status?.toLowerCase() || '';
+            if (pack && normalizedStatus === 'active') {
               packs.push(pack);
             }
           } catch (error) {

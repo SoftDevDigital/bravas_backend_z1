@@ -10,13 +10,14 @@ import {
   Request,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   HttpCode,
   HttpStatus,
   UseGuards,
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -258,9 +259,9 @@ Lista posts según el rol del usuario y parámetros de consulta.
         };
       }
 
-      // Si es USER o MODEL y no especificó userId ni type, mostrar feed personalizado
-      const isUserOrModel = (userInfo.role === 'USER' || userInfo.role === 'user' || 
-                            userInfo.role === 'MODEL' || userInfo.role === 'model');
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      const isUserOrModel = (normalizedRole === 'user' || normalizedRole === 'model');
       
       if (isUserOrModel && !userId && feedType !== 'global') {
         const result = await this.contentService.getPersonalizedFeed(userInfo.userId, limitNum, cursor);
@@ -374,9 +375,9 @@ Este endpoint es equivalente a \`GET /content/posts?type=following\`. Usa este e
     try {
       const userInfo = await getUserFromToken(req.token);
 
-      // Solo usuarios USER y MODEL pueden acceder al feed personalizado
-      const isUserOrModel = (userInfo.role === 'USER' || userInfo.role === 'user' || 
-                            userInfo.role === 'MODEL' || userInfo.role === 'model');
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      const isUserOrModel = (normalizedRole === 'user' || normalizedRole === 'model');
       
       if (!isUserOrModel) {
         throw new ForbiddenException('Solo usuarios con rol USER o MODEL pueden acceder al feed personalizado. AGENCY debe usar GET /content/posts para feed global.');
@@ -500,7 +501,8 @@ Authorization: Bearer {token}
   async likePost(@Request() req: any, @Param('postId') postId: string) {
     try {
       const userInfo = await getUserFromToken(req.token);
-      const result = await this.contentService.toggleLike(postId, userInfo.userId);
+      const userRole = userInfo.role?.toLowerCase() as 'buyer' | 'model' | 'agency' | undefined;
+      const result = await this.contentService.toggleLike(postId, userInfo.userId, userRole);
 
       return {
         success: true,
@@ -633,9 +635,9 @@ Authorization: Bearer {token}
   "data": [
     {
       "userId": "user_123",
-      "userName": "Juan Pérez",
-      "avatar": "https://...",
-      "likedAt": "2024-01-20T15:30:00Z"
+      "userRole": "user",
+      "fullName": "Juan Pérez",
+      "avatarUrl": "https://..."
     }
   ],
   "pagination": {
@@ -1010,7 +1012,9 @@ Authorization: Bearer {token}
     try {
       const userInfo = await getUserFromToken(req.token);
 
-      if (userInfo.role !== 'model') {
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      if (normalizedRole !== 'model') {
         throw new BadRequestException('Solo los modelos pueden crear packs');
       }
 
@@ -1064,7 +1068,9 @@ Authorization: Bearer {token}
 
       const userInfo = await getUserFromToken(req.token);
 
-      if (userInfo.role !== 'model') {
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      if (normalizedRole !== 'model') {
         throw new BadRequestException('Solo los modelos pueden subir imágenes de packs');
       }
 
@@ -1218,8 +1224,10 @@ Authorization: Bearer {token}
     try {
       const userInfo = await getUserFromToken(req.token);
 
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
       // Solo usuarios USER pueden ver sus packs comprados
-      if (userInfo.role !== 'USER' && userInfo.role !== 'user') {
+      if (normalizedRole !== 'user') {
         throw new ForbiddenException('Solo usuarios con rol USER pueden ver sus packs comprados');
       }
 
@@ -1325,7 +1333,9 @@ Authorization: Bearer {token}
     try {
       const userInfo = await getUserFromToken(req.token);
 
-      if (userInfo.role !== 'model') {
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      if (normalizedRole !== 'model') {
         throw new BadRequestException('Solo los modelos pueden editar packs');
       }
 
@@ -1338,6 +1348,171 @@ Authorization: Bearer {token}
       };
     } catch (error: any) {
       this.logger.error('Error al actualizar pack', error?.stack, 'updatePack', {
+        packId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * POST /content/packs/:packId/content
+   * Subir múltiples imágenes y videos al pack
+   */
+  @Post('packs/:packId/content')
+  @UseInterceptors(FilesInterceptor('files', 20)) // Máximo 20 archivos
+  @HttpCode(HttpStatus.OK)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: '📦 Subir contenido al pack (imágenes y videos)',
+    description: `
+**¿Para qué sirve?**
+Sube múltiples imágenes y videos a un pack existente. Este es el endpoint principal para agregar contenido (fotos y videos) al pack.
+
+**Casos de uso:**
+- Agregar múltiples fotos al pack
+- Agregar videos al pack
+- Completar el contenido del pack después de crearlo
+
+**Restricciones:**
+- Solo disponible para usuarios con rol MODEL
+- Solo el propietario del pack puede agregar contenido
+- Máximo 20 archivos por request
+- Imágenes: máximo 10MB cada una
+- Videos: máximo 100MB cada uno
+
+**Tipos de archivo permitidos:**
+- Imágenes: JPEG, PNG, WebP, GIF
+- Videos: MP4, WebM, MOV, AVI
+
+**Ejemplo de uso en Postman:**
+1. Body → form-data
+2. Key: \`files\` (tipo: File)
+3. Selecciona múltiples archivos (mantén Ctrl/Cmd para seleccionar varios)
+
+**Ejemplo de respuesta:**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "packId": "pack_123",
+    "uploaded": [
+      {
+        "contentUrl": "https://...",
+        "contentKey": "packs/model123/pack_123/content/uuid.jpg",
+        "type": "image"
+      },
+      {
+        "contentUrl": "https://...",
+        "contentKey": "packs/model123/pack_123/content/uuid.mp4",
+        "type": "video"
+      }
+    ],
+    "totalUploaded": 2
+  },
+  "message": "Contenido subido exitosamente"
+}
+\`\`\`
+    `.trim(),
+  })
+  @ApiParam({
+    name: 'packId',
+    description: 'ID del pack al que se agregará el contenido',
+    example: 'pack_123',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: {
+            type: 'string',
+            format: 'binary',
+          },
+          description: 'Múltiples archivos (imágenes y videos)',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Contenido subido exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: '❌ Archivos inválidos o pack no encontrado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: '❌ No tienes permiso para agregar contenido a este pack',
+  })
+  async uploadPackContent(
+    @Request() req: any,
+    @Param('packId') packId: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    try {
+      if (!files || files.length === 0) {
+        throw new BadRequestException('No se proporcionaron archivos');
+      }
+
+      const userInfo = await getUserFromToken(req.token);
+
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      if (normalizedRole !== 'model') {
+        throw new BadRequestException('Solo los modelos pueden subir contenido a packs');
+      }
+
+      // Verificar que el pack existe y pertenece al usuario
+      const pack = await this.contentService.getPackById(packId);
+      const normalizedPackModelId = pack.modelId?.toLowerCase() || '';
+      const normalizedUserId = userInfo.userId?.toLowerCase() || '';
+
+      if (normalizedPackModelId !== normalizedUserId) {
+        throw new ForbiddenException('No tienes permiso para agregar contenido a este pack');
+      }
+
+      // Subir todos los archivos
+      const uploadedContent = await Promise.all(
+        files.map(async (file) => {
+          const result = await this.s3Service.uploadPackContent(
+            userInfo.userId,
+            packId,
+            file.buffer,
+            file.mimetype,
+          );
+          return result;
+        }),
+      );
+
+      // Actualizar el pack con las nuevas URLs y keys
+      const existingContentUrls = pack.contentUrls || [];
+      const existingContentKeys = pack.contentKeys || [];
+
+      const newContentUrls = uploadedContent.map((c) => c.contentUrl);
+      const newContentKeys = uploadedContent.map((c) => c.contentKey);
+
+      const updatedContentUrls = [...existingContentUrls, ...newContentUrls];
+      const updatedContentKeys = [...existingContentKeys, ...newContentKeys];
+
+      await this.contentService.updatePack(packId, userInfo.userId, {
+        contentUrls: updatedContentUrls,
+        contentKeys: updatedContentKeys,
+      });
+
+      return {
+        success: true,
+        data: {
+          packId,
+          uploaded: uploadedContent,
+          totalUploaded: uploadedContent.length,
+        },
+        message: 'Contenido subido exitosamente',
+      };
+    } catch (error: any) {
+      this.logger.error('Error al subir contenido al pack', error?.stack, 'uploadPackContent', {
         packId,
         error: error.message,
       });
@@ -1364,7 +1539,9 @@ Authorization: Bearer {token}
     try {
       const userInfo = await getUserFromToken(req.token);
 
-      if (userInfo.role !== 'model') {
+      // Normalizar rol para comparación
+      const normalizedRole = userInfo.role?.toLowerCase() || '';
+      if (normalizedRole !== 'model') {
         throw new BadRequestException('Solo los modelos pueden eliminar packs');
       }
 

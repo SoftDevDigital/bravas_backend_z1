@@ -64,7 +64,7 @@ export interface PackRecord {
   // Información del pack
   name: string; // Nombre del pack
   description?: string; // Descripción del pack
-  price: number; // Precio en centavos (ej: 3500 = $35.00)
+  price: number; // Precio en dólares (ej: 35.00 = $35.00)
   
   // Contenido
   imageUrl: string; // URL de la imagen de portada en S3
@@ -74,7 +74,7 @@ export interface PackRecord {
   
   // Estadísticas
   salesCount: number; // Número de ventas
-  totalRevenue: number; // Ingresos totales en centavos
+  totalRevenue: number; // Ingresos totales en dólares
   
   // Estado
   status: 'active' | 'deleted' | 'hidden'; // Estado del pack
@@ -116,6 +116,9 @@ export interface PostLikeRecord {
   
   // Sort Key
   userId: string; // ID del usuario que dio like
+  
+  // Información del usuario que dio like
+  userRole?: 'buyer' | 'model' | 'agency'; // Rol del usuario que dio like
   
   // Metadatos
   createdAt: string; // ISO timestamp
